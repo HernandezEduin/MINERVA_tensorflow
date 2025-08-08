@@ -62,7 +62,7 @@ class RelationEntityGrapher:
 
                 correct_e2 = answers[i]
                 for j in range(entities.shape[0]):
-                    if entities[j] in all_correct_answers[i/rollouts] and entities[j] != correct_e2:
+                    if entities[j] in all_correct_answers[i//rollouts] and entities[j] != correct_e2:
                         entities[j] = self.ePAD
                         relations[j] = self.rPAD
 

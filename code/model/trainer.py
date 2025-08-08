@@ -17,7 +17,7 @@ import resource
 import sys
 from code.model.baseline import ReactiveBaseline
 from code.model.nell_eval import nell_eval
-from scipy.misc import logsumexp as lse
+from scipy.special import logsumexp as lse
 
 logger = logging.getLogger()
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
@@ -583,7 +583,7 @@ if __name__ == '__main__':
         trainer.test(sess, beam=True, print_paths=True, save_model=False)
 
 
-        print options['nell_evaluation']
+        print(options['nell_evaluation'])
         if options['nell_evaluation'] == 1:
             nell_eval(path_logger_file + "/" + "test_beam/" + "pathsanswers", trainer.data_input_dir+'/sort_test.pairs' )
 

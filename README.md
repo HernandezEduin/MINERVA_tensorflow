@@ -10,7 +10,7 @@ MINERVA is a RL agent which answers queries in a knowledge graph of entities and
 
 
 ## Requirements
-To install the various python dependencies (including tensorflow)
+To install the various python dependencies (including tensorflow), make sure you use Python 3.6
 ```
 pip install -r requirements.txt
 ```
@@ -18,11 +18,11 @@ pip install -r requirements.txt
 ## Training
 Training MINERVA is easy!. The hyperparam configs for each experiments are in the [configs](https://github.com/shehzaadzd/MINERVA/tree/master/configs) directory. To start a particular experiment, just do
 ```
-sh run.sh configs/${dataset}.sh
+bash run.sh configs/${dataset}.sh
 ```
 where the `${dataset}.sh` is the name of the config file. For example, 
 ```
-sh run.sh configs/countries_s3.sh
+bash run.sh configs/countries_s3.sh
 ```
 
 ## Testing
