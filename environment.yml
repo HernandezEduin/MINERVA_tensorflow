@@ -1,0 +1,14 @@
+name: minerva_tf2
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9
+  - cudatoolkit=11.2
+  - cudnn=8.1.0
+  - pip
+  - pip:
+      - networkx==2.8.8
+      - numpy==1.23.5
+      - tensorflow==2.11.1
+      - scipy==1.10.1
+      - tqdm==4.64.1

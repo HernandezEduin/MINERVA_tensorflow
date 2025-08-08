@@ -15,6 +15,13 @@ To install the various Python dependencies (including TensorFlow), make sure you
 pip install -r requirements_cpu_tf2.txt
 ```
 
+To install the gpu, run the following command in your conda environment
+
+```
+conda install -c conda-forge cudatoolkit=11.2 cudnn=8.1.0 -y
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
+```
+
 
 ## Key changes in this fork
 
