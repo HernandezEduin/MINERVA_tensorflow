@@ -1,6 +1,6 @@
 import numpy as np
 import tensorflow as tf
-
+tf.compat.v1.disable_eager_execution()
 
 class Agent(object):
 
@@ -13,7 +13,7 @@ class Agent(object):
         self.ePAD = tf.constant(params['entity_vocab']['PAD'], dtype=tf.int32)
         self.rPAD = tf.constant(params['relation_vocab']['PAD'], dtype=tf.int32)
         if params['use_entity_embeddings']:
-            self.entity_initializer = tf.contrib.layers.xavier_initializer()
+            self.entity_initializer = tf.keras.initializers.GlorotUniform()
         else:
             self.entity_initializer = tf.zeros_initializer()
         self.train_entities = params['train_entity_embeddings']
@@ -33,44 +33,44 @@ class Agent(object):
         else:
             self.m = 2
 
-        with tf.variable_scope("action_lookup_table"):
-            self.action_embedding_placeholder = tf.placeholder(tf.float32,
+        with tf.compat.v1.variable_scope("action_lookup_table"):
+            self.action_embedding_placeholder = tf.compat.v1.placeholder(tf.float32,
                                                                [self.action_vocab_size, 2 * self.embedding_size])
 
-            self.relation_lookup_table = tf.get_variable("relation_lookup_table",
+            self.relation_lookup_table = tf.compat.v1.get_variable("relation_lookup_table",
                                                          shape=[self.action_vocab_size, 2 * self.embedding_size],
                                                          dtype=tf.float32,
-                                                         initializer=tf.contrib.layers.xavier_initializer(),
+                                                         initializer=tf.keras.initializers.GlorotUniform(),
                                                          trainable=self.train_relations)
             self.relation_embedding_init = self.relation_lookup_table.assign(self.action_embedding_placeholder)
 
-        with tf.variable_scope("entity_lookup_table"):
-            self.entity_embedding_placeholder = tf.placeholder(tf.float32,
+        with tf.compat.v1.variable_scope("entity_lookup_table"):
+            self.entity_embedding_placeholder = tf.compat.v1.placeholder(tf.float32,
                                                                [self.entity_vocab_size, 2 * self.embedding_size])
-            self.entity_lookup_table = tf.get_variable("entity_lookup_table",
+            self.entity_lookup_table = tf.compat.v1.get_variable("entity_lookup_table",
                                                        shape=[self.entity_vocab_size, 2 * self.entity_embedding_size],
                                                        dtype=tf.float32,
                                                        initializer=self.entity_initializer,
                                                        trainable=self.train_entities)
             self.entity_embedding_init = self.entity_lookup_table.assign(self.entity_embedding_placeholder)
 
-        with tf.variable_scope("policy_step"):
+        with tf.compat.v1.variable_scope("policy_step"):
             cells = []
             for _ in range(self.LSTM_Layers):
-                cells.append(tf.contrib.rnn.LSTMCell(self.m * self.hidden_size, use_peepholes=True, state_is_tuple=True))
-            self.policy_step = tf.contrib.rnn.MultiRNNCell(cells, state_is_tuple=True)
+                cells.append(tf.compat.v1.nn.rnn_cell.LSTMCell(self.m * self.hidden_size, use_peepholes=True, state_is_tuple=True))
+            self.policy_step = tf.compat.v1.nn.rnn_cell.MultiRNNCell(cells, state_is_tuple=True)
 
     def get_mem_shape(self):
         return (self.LSTM_Layers, 2, None, self.m * self.hidden_size)
 
     def policy_MLP(self, state):
-        with tf.variable_scope("MLP_for_policy"):
-            hidden = tf.layers.dense(state, 4 * self.hidden_size, activation=tf.nn.relu)
-            output = tf.layers.dense(hidden, self.m * self.embedding_size, activation=tf.nn.relu)
+        with tf.compat.v1.variable_scope("MLP_for_policy"):
+            hidden = tf.compat.v1.layers.dense(state, 4 * self.hidden_size, activation=tf.nn.relu)
+            output = tf.compat.v1.layers.dense(hidden, self.m * self.embedding_size, activation=tf.nn.relu)
         return output
 
     def action_encoder(self, next_relations, next_entities):
-        with tf.variable_scope("lookup_table_edge_encoder"):
+        with tf.compat.v1.variable_scope("lookup_table_edge_encoder"):
             relation_embedding = tf.nn.embedding_lookup(self.relation_lookup_table, next_relations)
             entity_embedding = tf.nn.embedding_lookup(self.entity_lookup_table, next_entities)
             if self.use_entity_embeddings:
@@ -109,7 +109,7 @@ class Agent(object):
         scores = tf.where(mask, dummy_scores, prelim_scores)  # [B, MAX_NUM_ACTIONS]
 
         # 4 sample action
-        action = tf.to_int32(tf.multinomial(logits=scores, num_samples=1))  # [B, 1]
+        action = tf.cast(tf.random.categorical(logits=scores, num_samples=1), tf.int32)  # [B, 1]
 
         # loss
         # 5a.
@@ -136,7 +136,7 @@ class Agent(object):
         all_logits = []  # list of actions each [B,]
         action_idx = []
 
-        with tf.variable_scope("policy_steps_unroll") as scope:
+        with tf.compat.v1.variable_scope("policy_steps_unroll") as scope:
             for t in range(T):
                 if t > 0:
                     scope.reuse_variables()

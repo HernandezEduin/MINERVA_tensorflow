@@ -1,7 +1,7 @@
 from __future__ import division
 from __future__ import absolute_import
 import tensorflow as tf
-
+tf.compat.v1.disable_eager_execution()
 
 class baseline(object):
     def get_baseline_value(self):

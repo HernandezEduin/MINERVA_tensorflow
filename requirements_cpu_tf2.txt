@@ -1,0 +1,26 @@
+# Requirements for CPU-only version (recommended for compatibility)
+# Use this if you don't have CUDA 8.0 properly installed
+
+# code/data/preprocessing_scripts/create_graph.py: 1
+networkx == 2.8.8
+
+# code/data/feed_data.py: 3
+# code/data/grapher.py: 3
+# code/data/preprocessing_scripts/create_inverse.py: 3
+# code/data/preprocessing_scripts/nell.py: 4
+# code/data/preprocessing_scripts/preprocess.py: 3
+# code/data/preprocessing_scripts/preprocess_countries.py: 3
+# code/model/agent.py: 1
+# code/model/environment.py: 3
+# code/model/trainer.py: 8
+numpy == 1.23.5
+
+# CPU version of TensorFlow (compatible with most systems)
+tensorflow == 2.11.1
+
+# code/model/trainer.py: 20 (for logsumexp)
+scipy == 1.10.1 
+
+# code/data/feed_data.py: 1
+# code/model/trainer.py: 3
+tqdm == 4.64.1

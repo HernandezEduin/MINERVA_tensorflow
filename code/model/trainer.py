@@ -7,6 +7,8 @@ import os
 import logging
 import numpy as np
 import tensorflow as tf
+tf.compat.v1.disable_eager_execution()
+
 from code.model.agent import Agent
 from code.options import read_options
 from code.model.environment import env
@@ -42,7 +44,7 @@ class Trainer(object):
         self.rPAD = self.relation_vocab['PAD']
         # optimize
         self.baseline = ReactiveBaseline(l=self.Lambda)
-        self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
+        self.optimizer = tf.compat.v1.train.AdamOptimizer(self.learning_rate)
 
 
     def calc_reinforce_loss(self):
@@ -56,7 +58,7 @@ class Trainer(object):
         reward_mean, reward_var = tf.nn.moments(final_reward, axes=[0, 1])
         # Constant added for numerical stability
         reward_std = tf.sqrt(reward_var) + 1e-6
-        final_reward = tf.div(final_reward - reward_mean, reward_std)
+        final_reward =  tf.math.divide(final_reward - reward_mean, reward_std)
 
         loss = tf.multiply(loss, final_reward)  # [B, T]
         self.loss_before_reg = loss
@@ -76,27 +78,27 @@ class Trainer(object):
         self.candidate_relation_sequence = []
         self.candidate_entity_sequence = []
         self.input_path = []
-        self.first_state_of_test = tf.placeholder(tf.bool, name="is_first_state_of_test")
-        self.query_relation = tf.placeholder(tf.int32, [None], name="query_relation")
-        self.range_arr = tf.placeholder(tf.int32, shape=[None, ])
+        self.first_state_of_test = tf.compat.v1.placeholder(tf.bool, name="is_first_state_of_test")
+        self.query_relation = tf.compat.v1.placeholder(tf.int32, [None], name="query_relation")
+        self.range_arr = tf.compat.v1.placeholder(tf.int32, shape=[None, ])
         self.global_step = tf.Variable(0, trainable=False)
-        self.decaying_beta = tf.train.exponential_decay(self.beta, self.global_step,
+        self.decaying_beta = tf.compat.v1.train.exponential_decay(self.beta, self.global_step,
                                                    200, 0.90, staircase=False)
         self.entity_sequence = []
 
         # to feed in the discounted reward tensor
-        self.cum_discounted_reward = tf.placeholder(tf.float32, [None, self.path_length],
+        self.cum_discounted_reward = tf.compat.v1.placeholder(tf.float32, [None, self.path_length],
                                                     name="cumulative_discounted_reward")
 
 
 
         for t in range(self.path_length):
-            next_possible_relations = tf.placeholder(tf.int32, [None, self.max_num_actions],
+            next_possible_relations = tf.compat.v1.placeholder(tf.int32, [None, self.max_num_actions],
                                                    name="next_relations_{}".format(t))
-            next_possible_entities = tf.placeholder(tf.int32, [None, self.max_num_actions],
+            next_possible_entities = tf.compat.v1.placeholder(tf.int32, [None, self.max_num_actions],
                                                      name="next_entities_{}".format(t))
-            input_label_relation = tf.placeholder(tf.int32, [None], name="input_label_relation_{}".format(t))
-            start_entities = tf.placeholder(tf.int32, [None, ])
+            input_label_relation = tf.compat.v1.placeholder(tf.int32, [None], name="input_label_relation_{}".format(t))
+            start_entities = tf.compat.v1.placeholder(tf.int32, [None, ])
             self.input_path.append(input_label_relation)
             self.candidate_relation_sequence.append(next_possible_relations)
             self.candidate_entity_sequence.append(next_possible_entities)
@@ -115,19 +117,19 @@ class Trainer(object):
         self.train_op = self.bp(self.loss_op)
 
         # Building the test graph
-        self.prev_state = tf.placeholder(tf.float32, self.agent.get_mem_shape(), name="memory_of_agent")
-        self.prev_relation = tf.placeholder(tf.int32, [None, ], name="previous_relation")
+        self.prev_state = tf.compat.v1.placeholder(tf.float32, self.agent.get_mem_shape(), name="memory_of_agent")
+        self.prev_relation = tf.compat.v1.placeholder(tf.int32, [None, ], name="previous_relation")
         self.query_embedding = tf.nn.embedding_lookup(self.agent.relation_lookup_table, self.query_relation)  # [B, 2D]
         layer_state = tf.unstack(self.prev_state, self.LSTM_layers)
         formated_state = [tf.unstack(s, 2) for s in layer_state]
-        self.next_relations = tf.placeholder(tf.int32, shape=[None, self.max_num_actions])
-        self.next_entities = tf.placeholder(tf.int32, shape=[None, self.max_num_actions])
+        self.next_relations = tf.compat.v1.placeholder(tf.int32, shape=[None, self.max_num_actions])
+        self.next_entities = tf.compat.v1.placeholder(tf.int32, shape=[None, self.max_num_actions])
 
-        self.current_entities = tf.placeholder(tf.int32, shape=[None,])
+        self.current_entities = tf.compat.v1.placeholder(tf.int32, shape=[None,])
 
 
 
-        with tf.variable_scope("policy_steps_unroll") as scope:
+        with tf.compat.v1.variable_scope("policy_steps_unroll") as scope:
             scope.reuse_variables()
             self.test_loss, test_state, self.test_logits, self.test_action_idx, self.chosen_relation = self.agent.step(
                 self.next_relations, self.next_entities, formated_state, self.prev_relation, self.query_embedding,
@@ -135,11 +137,11 @@ class Trainer(object):
             self.test_state = tf.stack(test_state)
 
         logger.info('TF Graph creation done..')
-        self.model_saver = tf.train.Saver(max_to_keep=2)
+        self.model_saver = tf.compat.v1.train.Saver(max_to_keep=2)
 
         # return the variable initializer Op.
         if not restore:
-            return tf.global_variables_initializer()
+            return tf.compat.v1.global_variables_initializer()
         else:
             return  self.model_saver.restore(sess, restore)
 
@@ -157,8 +159,8 @@ class Trainer(object):
 
     def bp(self, cost):
         self.baseline.update(tf.reduce_mean(self.cum_discounted_reward))
-        tvars = tf.trainable_variables()
-        grads = tf.gradients(cost, tvars)
+        tvars = tf.compat.v1.trainable_variables()
+        grads = tf.compat.v1.gradients(cost, tvars)
         grads, _ = tf.clip_by_global_norm(grads, self.grad_clip_norm)
         train_op = self.optimizer.apply_gradients(zip(grads, tvars))
         with tf.control_dependencies([train_op]):  # see https://github.com/tensorflow/tensorflow/issues/1899
@@ -266,7 +268,7 @@ class Trainer(object):
             if self.batch_counter%self.eval_every == 0:
                 with open(self.output_dir + '/scores.txt', 'a') as score_file:
                     score_file.write("Score for iteration " + str(self.batch_counter) + "\n")
-                os.mkdir(self.path_logger_file + "/" + str(self.batch_counter))
+                os.makedirs(self.path_logger_file + "/" + str(self.batch_counter), exist_ok=True)
                 self.path_logger_file_ = self.path_logger_file + "/" + str(self.batch_counter) + "/paths"
 
 
@@ -540,7 +542,7 @@ if __name__ == '__main__':
     logger.info('Total number of entities {}'.format(len(options['entity_vocab'])))
     logger.info('Total number of relations {}'.format(len(options['relation_vocab'])))
     save_path = ''
-    config = tf.ConfigProto()
+    config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = False
     config.log_device_placement = False
 
@@ -548,7 +550,7 @@ if __name__ == '__main__':
     #Training
     if not options['load_model']:
         trainer = Trainer(options)
-        with tf.Session(config=config) as sess:
+        with tf.compat.v1.Session(config=config) as sess:
             sess.run(trainer.initialize())
             trainer.initialize_pretrained_embeddings(sess=sess)
 
@@ -557,7 +559,7 @@ if __name__ == '__main__':
             path_logger_file = trainer.path_logger_file
             output_dir = trainer.output_dir
 
-        tf.reset_default_graph()
+        tf.compat.v1.reset_default_graph()
     #Testing on test with best model
     else:
         logger.info("Skipping training")
@@ -568,12 +570,12 @@ if __name__ == '__main__':
         save_path = options['model_load_dir']
         path_logger_file = trainer.path_logger_file
         output_dir = trainer.output_dir
-    with tf.Session(config=config) as sess:
+    with tf.compat.v1.Session(config=config) as sess:
         trainer.initialize(restore=save_path, sess=sess)
 
         trainer.test_rollouts = 100
 
-        os.mkdir(path_logger_file + "/" + "test_beam")
+        os.makedirs(path_logger_file + "/" + "test_beam", exist_ok=True)
         trainer.path_logger_file_ = path_logger_file + "/" + "test_beam" + "/paths"
         with open(output_dir + '/scores.txt', 'a') as score_file:
             score_file.write("Test (beam) scores with best model from " + save_path + "\n")
