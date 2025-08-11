@@ -24,3 +24,8 @@ scipy == 1.10.1
 # code/data/feed_data.py: 1
 # code/model/trainer.py: 3
 tqdm == 4.64.1
+
+# code/model/transformer.py: 1
+transformers==4.35.2
+tokenizers<0.15
+safetensors==0.3.3
