@@ -69,6 +69,12 @@ class QuestionBatcher():
         """
         return self.mode
 
+    def get_question_num(self) -> int:
+        """
+        Get the number of questions in the current batch.
+        """
+        return len(self.eval_df)
+
     def yield_next_batch_train(self) -> Generator[Tuple[list, tf.Tensor, np.ndarray, np.ndarray], None, None]:
         assert self.mode == 'train', "Batcher is not in training mode"
         while True:
