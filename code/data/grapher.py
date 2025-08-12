@@ -3,11 +3,22 @@ import logging
 import numpy as np
 import csv
 
+from typing import Dict
+
 logger = logging.getLogger(__name__)
 
 
 class RelationEntityGrapher:
-    def __init__(self, triple_store, relation_vocab, entity_vocab, max_num_actions):
+    """
+    A class that constructs a graph from a knowledge base and provides methods to query it.
+    """
+    def __init__(
+            self, 
+            triple_store: str, 
+            relation_vocab: Dict[str, int], 
+            entity_vocab: Dict[str, int], 
+            max_num_actions: int
+        ) -> None:
 
         self.ePAD = entity_vocab['PAD']             # padding that masks out excess or invalid entity
         self.rPAD = relation_vocab['PAD']           # padding that masks out excess or invalid relation
@@ -26,7 +37,10 @@ class RelationEntityGrapher:
         print("KG constructed")
 
     # create the graph (neighborhood for a given entity) and the action space
-    def create_graph(self):
+    def create_graph(self) -> None:
+        """
+        Create the graph (neighborhood for a given entity) and the action space.
+        """
         # create the graph (neighborhood for a given entity)
         with open(self.triple_store) as triple_file_raw:
             triple_file = csv.reader(triple_file_raw, delimiter='\t')
@@ -50,7 +64,22 @@ class RelationEntityGrapher:
         del self.store
         self.store = None
 
-    def return_next_actions(self, current_entities, start_entities, query_relations, answers, all_correct_answers, last_step, rollouts):
+    def return_next_actions(
+            self, 
+            current_entities: np.ndarray, 
+            start_entities: np.ndarray, 
+            query_relations: np.ndarray, 
+            answers: np.ndarray, 
+            all_correct_answers: np.ndarray, 
+            last_step: bool, 
+            rollouts: int
+        ) -> np.ndarray:
+        """
+        Return the next actions for the current entities, given the context of the query.
+        Will mask out actions that lead directly to the query entity and actions that lead 
+        to alternative possible correct answers in the last step.
+        """
+
         ret = self.array_store[current_entities, :, :].copy() # get all the available actions given current entity
         for i in range(current_entities.shape[0]): # one sample at a time
             if current_entities[i] == start_entities[i]: # if the entity is at the starting point, mask the actions that lead to the query entity
@@ -71,3 +100,12 @@ class RelationEntityGrapher:
                         relations[j] = self.rPAD    # mask it out
 
         return ret
+
+    def return_next_raw_actions(
+            self, 
+            current_entities: np.ndarray
+        ) -> np.ndarray:
+        """
+        Return all available actions for the current entities, regardless of any other context.
+        """
+        return self.array_store[current_entities, :, :].copy()
