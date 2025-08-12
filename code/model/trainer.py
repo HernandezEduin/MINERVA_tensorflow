@@ -7,6 +7,7 @@ import os
 import logging
 import numpy as np
 import tensorflow as tf
+from typing import Dict, Any, List, Tuple, Optional, Union
 tf.compat.v1.disable_eager_execution()
 
 from code.model.agent import Agent
@@ -26,7 +27,37 @@ logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 
 
 class Trainer(object):
-    def __init__(self, params):
+    """
+    MINERVA trainer for reinforcement learning-based knowledge graph reasoning.
+    
+    This class orchestrates the training and evaluation of the MINERVA agent, which
+    learns to navigate knowledge graphs through multi-hop reasoning. The trainer
+    handles episode generation, reward computation, policy gradient updates, and
+    performance evaluation using various metrics (Hits@K, MRR).
+    
+    Key Components:
+    - Policy gradient training with REINFORCE algorithm
+    - Baseline variance reduction using reactive baseline
+    - Multi-environment support (train/dev/test)
+    - Comprehensive evaluation with beam search
+    - Model checkpointing and restoration
+    """
+    
+    def __init__(self, params: Dict[str, Any]) -> None:
+        """
+        Initialize the MINERVA trainer with configuration parameters.
+        
+        Sets up the agent, environments, baseline, optimizer, and all necessary
+        components for training and evaluation.
+        
+        Args:
+            params (Dict[str, Any]): Configuration dictionary containing:
+                - Agent parameters (embedding sizes, LSTM layers, etc.)
+                - Training parameters (learning rate, batch size, etc.) 
+                - Environment parameters (path length, rollouts, etc.)
+                - Evaluation parameters (beam size, metrics, etc.)
+                - Data paths and vocabulary mappings
+        """
 
         # transfer parameters to self
         for key, val in params.items(): setattr(self, key, val);
@@ -47,7 +78,24 @@ class Trainer(object):
         self.optimizer = tf.compat.v1.train.AdamOptimizer(self.learning_rate)
 
 
-    def calc_reinforce_loss(self):
+    def calc_reinforce_loss(self) -> tf.Tensor:
+        """
+        Calculate the REINFORCE policy gradient loss with baseline variance reduction.
+        
+        Implements the REINFORCE algorithm by:
+        1. Computing per-example losses from agent policy
+        2. Subtracting baseline value for variance reduction
+        3. Normalizing advantages by standard deviation
+        4. Weighting losses by normalized advantages
+        5. Adding entropy regularization for exploration
+        
+        The loss encourages actions that lead to higher-than-expected rewards
+        while penalizing those that lead to lower rewards.
+        
+        Returns:
+            tf.Tensor: Scalar loss value combining policy gradient loss and 
+                entropy regularization, ready for gradient descent optimization.
+        """
         loss = tf.stack(self.per_example_loss, axis=1)  # [B, T]
 
         self.tf_baseline = self.baseline.get_baseline_value()
@@ -67,12 +115,44 @@ class Trainer(object):
 
         return total_loss
 
-    def entropy_reg_loss(self, all_logits):
+    def entropy_reg_loss(self, all_logits: List[tf.Tensor]) -> tf.Tensor:
+        """
+        Calculate entropy regularization loss to encourage exploration.
+        
+        Computes the negative entropy of the policy to add to the main loss.
+        Higher entropy (more uniform action probabilities) gets lower penalty,
+        encouraging the agent to explore different actions rather than being
+        too deterministic early in training.
+        
+        Args:
+            all_logits (List[tf.Tensor]): Log probabilities over actions at each
+                time step. Each tensor has shape [batch_size, max_actions].
+                
+        Returns:
+            tf.Tensor: Scalar entropy regularization loss. Negative entropy
+                means higher entropy (exploration) reduces the total loss.
+        """
         all_logits = tf.stack(all_logits, axis=2)  # [B, MAX_NUM_ACTIONS, T]
         entropy_policy = - tf.reduce_mean(tf.reduce_sum(tf.multiply(tf.exp(all_logits), all_logits), axis=1))  # scalar
         return entropy_policy
 
-    def initialize(self, restore=None, sess=None):
+    def initialize(self, restore: Optional[str] = None, sess: Optional[tf.compat.v1.Session] = None) -> None:
+        """
+        Initialize the TensorFlow computational graph and training components.
+        
+        Sets up all placeholders, variables, and operations needed for training:
+        - Input placeholders for candidate actions and queries
+        - Agent policy network and loss computation
+        - Training operations with gradient clipping
+        - Model saving and restoration capabilities
+        - Optional pretrained embedding initialization
+        
+        Args:
+            restore (Optional[str]): Path to checkpoint file for model restoration.
+                If None, initializes with random weights.
+            sess (Optional[tf.Session]): TensorFlow session for initialization.
+                If None, uses current default session.
+        """
 
         logger.info("Creating TF graph...")
         self.candidate_relation_sequence = []
@@ -147,7 +227,17 @@ class Trainer(object):
 
 
 
-    def initialize_pretrained_embeddings(self, sess):
+    def initialize_pretrained_embeddings(self, sess: tf.compat.v1.Session) -> None:
+        """
+        Load and initialize pretrained embeddings for entities and relations.
+        
+        If pretrained embedding files are specified in the configuration,
+        loads them and initializes the corresponding embedding lookup tables.
+        This can significantly improve training speed and final performance.
+        
+        Args:
+            sess (tf.Session): TensorFlow session for running initialization ops.
+        """
         if self.pretrained_embeddings_action != '':
             embeddings = np.loadtxt(open(self.pretrained_embeddings_action))
             _ = sess.run((self.agent.relation_embedding_init),
@@ -157,7 +247,22 @@ class Trainer(object):
             _ = sess.run((self.agent.entity_embedding_init),
                          feed_dict={self.agent.entity_embedding_placeholder: embeddings})
 
-    def bp(self, cost):
+    def bp(self, cost: tf.Tensor) -> tf.Operation:
+        """
+        Set up backpropagation with baseline update and gradient clipping.
+        
+        Creates the training operation that:
+        1. Updates the baseline with current reward
+        2. Computes gradients of cost w.r.t. trainable variables  
+        3. Clips gradients by global norm to prevent exploding gradients
+        4. Applies gradients using Adam optimizer
+        
+        Args:
+            cost (tf.Tensor): Scalar loss tensor to minimize.
+            
+        Returns:
+            tf.Operation: Training operation that updates model parameters.
+        """
         self.baseline.update(tf.reduce_mean(self.cum_discounted_reward))
         tvars = tf.compat.v1.trainable_variables()
         grads = tf.compat.v1.gradients(cost, tvars)
@@ -168,13 +273,24 @@ class Trainer(object):
         return train_op
 
 
-    def calc_cum_discounted_reward(self, rewards):
+    def calc_cum_discounted_reward(self, rewards: np.ndarray) -> np.ndarray:
         """
-        calculates the cumulative discounted reward.
-        :param rewards:
-        :param T:
-        :param gamma:
-        :return:
+        Calculate cumulative discounted rewards for policy gradient training.
+        
+        Computes the discounted return from each time step using the formula:
+        G_t = R_t + γ*R_{t+1} + γ²*R_{t+2} + ... + γ^{T-t}*R_T
+        
+        This provides the expected long-term reward from each state, which
+        serves as the target for the baseline and the weight for policy gradients.
+        
+        Args:
+            rewards (np.ndarray): Final rewards received at episode end.
+                Shape: [batch_size]
+                
+        Returns:
+            np.ndarray: Cumulative discounted rewards for each time step.
+                Shape: [batch_size, path_length]. Entry [i,t] is the discounted
+                return from time step t for episode i.
         """
         running_add = np.zeros([rewards.shape[0]])  # [B]
         cum_disc_reward = np.zeros([rewards.shape[0], self.path_length])  # [B, T]
@@ -185,7 +301,20 @@ class Trainer(object):
             cum_disc_reward[:, t] = running_add
         return cum_disc_reward
 
-    def gpu_io_setup(self):
+    def gpu_io_setup(self) -> Tuple[List[tf.Tensor], List[tf.Tensor], List[Dict[tf.Tensor, Any]]]:
+        """
+        Set up TensorFlow partial_run configuration for efficient episode processing.
+        
+        Creates the fetches, feeds, and feed_dict structures needed for 
+        TensorFlow's partial_run functionality, which allows dynamic unrolling
+        of episodes while maintaining computational efficiency.
+        
+        Returns:
+            Tuple containing:
+                - fetches: List of tensors to fetch during partial_run
+                - feeds: List of placeholder tensors for feeding data
+                - feed_dict: List of feed dictionaries for each time step
+        """
         # create fetches for partial_run_setup
         fetches = self.per_example_loss  + self.action_idx + [self.loss_op] + self.per_example_logits + [self.dummy]
         feeds =  [self.first_state_of_test] + self.candidate_relation_sequence+ self.candidate_entity_sequence + self.input_path + \
@@ -205,7 +334,25 @@ class Trainer(object):
 
         return fetches, feeds, feed_dict
 
-    def train(self, sess):
+    def train(self, sess: tf.compat.v1.Session) -> None:
+        """
+        Execute one epoch of MINERVA training using policy gradients.
+        
+        Performs the complete training loop:
+        1. Iterates through all training episodes
+        2. For each episode, unrolls the policy for path_length steps
+        3. Collects actions, logits, and losses at each step
+        4. Computes final rewards and discounted returns
+        5. Updates policy parameters using REINFORCE algorithm
+        6. Updates baseline for variance reduction
+        7. Logs training statistics and progress
+        
+        Uses TensorFlow's partial_run for efficient episode processing,
+        allowing dynamic unrolling while maintaining computational efficiency.
+        
+        Args:
+            sess (tf.Session): Active TensorFlow session for training operations.
+        """
         # import pdb
         # pdb.set_trace()
         fetches, feeds, feed_dict = self.gpu_io_setup()
@@ -281,7 +428,39 @@ class Trainer(object):
             if self.batch_counter >= self.total_iterations:
                 break
 
-    def test(self, sess, beam=False, print_paths=False, save_model = True, auc = False):
+    def test(self, sess: tf.compat.v1.Session, beam: bool = False, print_paths: bool = False, 
+             save_model: bool = True, auc: bool = False) -> Tuple[float, float, float, float, float]:
+        """
+        Evaluate the trained MINERVA agent on test data with multiple metrics.
+        
+        Performs comprehensive evaluation including:
+        - Hits@K metrics (K=1,3,5,10,20) for answer prediction accuracy
+        - Mean Reciprocal Rank (MRR) for ranking quality assessment  
+        - Optional beam search for improved performance
+        - Path visualization and analysis
+        - Model checkpointing based on performance
+        
+        The evaluation uses multiple rollouts per query and aggregates results
+        to provide robust performance estimates across different reasoning paths.
+        
+        Args:
+            sess (tf.Session): Active TensorFlow session for inference.
+            beam (bool, optional): Whether to use beam search decoding.
+                Defaults to False (greedy decoding).
+            print_paths (bool, optional): Whether to print reasoning paths.
+                Defaults to False.
+            save_model (bool, optional): Whether to save model if performance improves.
+                Defaults to True.
+            auc (bool, optional): Whether to compute AUC metrics. Defaults to False.
+                
+        Returns:
+            Tuple[float, float, float, float, float]: Performance metrics:
+                - Hits@1: Fraction of queries with correct answer in top 1
+                - Hits@3: Fraction of queries with correct answer in top 3  
+                - Hits@5: Fraction of queries with correct answer in top 5
+                - Hits@10: Fraction of queries with correct answer in top 10
+                - Hits@20: Fraction of queries with correct answer in top 20
+        """
         batch_counter = 0
         paths = defaultdict(list)
         answers = []
@@ -510,7 +689,23 @@ class Trainer(object):
         logger.info("Hits@20: {0:7.4f}".format(all_final_reward_20))
         logger.info("auc: {0:7.4f}".format(auc))
 
-    def top_k(self, scores, k):
+    def top_k(self, scores: np.ndarray, k: int) -> np.ndarray:
+        """
+        Extract top-k indices from beam search scores for each batch element.
+        
+        Used in beam search decoding to select the k highest-scoring paths
+        from the expanded search space at each time step.
+        
+        Args:
+            scores (np.ndarray): Beam search scores for each batch element.
+                Shape: [batch_size, k * max_num_actions] where k is beam size.
+            k (int): Number of top scoring paths to keep (beam size).
+            
+        Returns:
+            np.ndarray: Flattened indices of top-k scoring actions.
+                Shape: [batch_size * k]. Can be reshaped to [batch_size, k]
+                to get top-k indices for each batch element.
+        """
         scores = scores.reshape(-1, k * self.max_num_actions)  # [B, (k*max_num_actions)]
         idx = np.argsort(scores, axis=1)
         idx = idx[:, -k:]  # take the last k highest indices # [B , k]
@@ -523,7 +718,7 @@ if __name__ == '__main__':
     # Set logging
     logger.setLevel(logging.INFO)
     fmt = logging.Formatter('%(asctime)s: [ %(message)s ]',
-                            '%m/%d/%Y %I:%M:%S %p')
+                            '%Y/%m/%d %I:%M:%S %p')
     console = logging.StreamHandler()
     console.setFormatter(fmt)
     logger.addHandler(console)
