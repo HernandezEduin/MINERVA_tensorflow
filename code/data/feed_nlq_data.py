@@ -31,19 +31,19 @@ class QuestionBatcher():
         ent2id, rel2id, id2ent, id2rel = load_dictionary(input_dir)
         self.entity_vocab = ent2id
         self.relation_vocab = rel2id
-        self.id2entity = id2ent
-        self.id2relation = id2rel
+        self.rev_entity_vocab = id2ent
+        self.rev_relation_vocab = id2rel
 
         self.train_df, self.dev_df, self.test_df, self.train_metadata = load_qa_data(
             cached_metadata_path=cached_QAMetaData_path,
             raw_QAData_path=raw_QAData_path,
             question_tokenizer_name=question_tokenizer_name,
-            answer_tokenizer_name=question_tokenizer_name, 
             entity2id=ent2id,
             relation2id=rel2id,
             logger=None,
             force_recompute=force_data_prepro,
         )
+
         self.set_mode(mode)
 
         # TODO: See if we can reduce this to 1 model
@@ -62,6 +62,12 @@ class QuestionBatcher():
             self.eval_df = self.dev_df
         else:
             self.eval_df = self.test_df
+
+    def set_batch_size(self, batch_size: int) -> None:
+        """
+        Set the batch size for the batcher.
+        """
+        self.batch_size = batch_size
 
     def get_mode(self) -> str:
         """
@@ -133,13 +139,13 @@ class QuestionBatcher():
         """
         Translate entity IDs into their corresponding entity names.
         """
-        return [self.id2entity.get(eid, "Unknown") for eid in entity_ids]
+        return [self.rev_entity_vocab.get(eid, "Unknown") for eid in entity_ids]
 
     def translate_relations(self, relation_ids: np.ndarray) -> list:
         """
         Translate relation IDs into their corresponding relation names.
         """
-        return [self.id2relation.get(rid, "Unknown") for rid in relation_ids]
+        return [self.rev_relation_vocab.get(rid, "Unknown") for rid in relation_ids]
 
     def translate_questions(self, questions: list) -> list:
         """

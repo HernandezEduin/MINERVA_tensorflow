@@ -38,6 +38,8 @@ if __name__ == "__main__":
     )
 
     next_batch_func = batcher.yield_next_batch_train if args.mode == 'train' else batcher.yield_next_batch_test
+    max_questions = batcher.get_question_num()
+    counter = 0
     for data in next_batch_func():
         questions, q_embeddings, source_ent, ans_ent = data
         question_text = batcher.translate_questions(questions)
@@ -46,3 +48,8 @@ if __name__ == "__main__":
 
         for i0 in range(source_ent.shape[0]):
             print(f"Batch Questions: {question_text[i0]}, Source Entity: {ent_names[i0]}, Answer Entity: {ans_ent_name[i0]}")
+        
+        counter += len(questions)
+
+        if counter >= max_questions:
+            break

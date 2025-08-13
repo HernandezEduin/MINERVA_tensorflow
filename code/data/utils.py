@@ -19,6 +19,8 @@ from collections import namedtuple
 from dataclasses import dataclass
 from typing import Dict, Optional, List, Tuple, Union, Optional
 
+# TODO: Separate the functions and classes of this file into a more appropriate file
+
 Triple = Tuple[int, int, int]
 Triples = List[Triple]
 # Named Tuple for DF SPlit
@@ -88,7 +90,6 @@ def process_and_cache_triviaqa_data(
     raw_QAData_path: str,
     cached_toked_qatriples_metadata_path: str,
     question_tokenizer: PreTrainedTokenizer,
-    answer_tokenizer: PreTrainedTokenizer,
     entity2id: Dict[str, int],
     relation2id: Dict[str, int],
     override_split: bool = True,
@@ -98,7 +99,7 @@ def process_and_cache_triviaqa_data(
     Args:
         raw_triples_loc (str) : Place where the unprocessed triples are
         cached_toked_qatriples_path (str) : Place where processed triples are meante to go. You must format them.
-        idx_2_graphEnc (Dict[str, np.array]) : The encoding of the tripleshttps://www.youtube.com/watch?v=f-sRcVkZ9yg
+        idx_2_graphEnc (Dict[str, np.array]) : The encoding of the triples
         text_tokenizer (AutoTokenizer) : The tokenizer for the text
     Returns:
 
@@ -122,9 +123,7 @@ def process_and_cache_triviaqa_data(
     # FIX: The harcoding of things like "Question" and "Answer" is not good.
     # !TODO: Make this more flexible and relavant entities and relations be optional features
     questions = csv_df["Question"]
-    answers = csv_df["Answer"]
     query_ent = csv_df["Query-Entity"]
-    query_rel = csv_df["Query-Relation"]
     answer_ent = csv_df["Answer-Entity"]
     paths = extract_literals(csv_df["Paths"]) if 'Paths' in csv_df.columns else None
     splitLabel = csv_df["SplitLabel"] if 'SplitLabel' in csv_df.columns else None
@@ -136,15 +135,9 @@ def process_and_cache_triviaqa_data(
 
     ## Prepare the language data
     questions = questions.map(lambda x: question_tokenizer.encode(x, add_special_tokens=False))
-    answers = answers.map(
-        lambda x: [answer_tokenizer.bos_token_id]
-        + answer_tokenizer.encode(x, add_special_tokens=False)
-        + [answer_tokenizer.eos_token_id]
-    )
 
     # Preparing the KG data by converting text to indices
     query_ent = query_ent.map(lambda ent: entity2id[ent])
-    query_rel = query_rel.map(lambda rel: relation2id[rel])
     answer_ent = answer_ent.map(lambda ent: entity2id[ent])
     if paths is not None:
         paths = paths.map(lambda path: [[entity2id[head], relation2id[rel], entity2id[tail]] for head, rel, tail in path])
@@ -164,7 +157,7 @@ def process_and_cache_triviaqa_data(
 
     # Start amalgamating the data into its final form
     # TODO: test set
-    new_df = pd.concat([questions, answers, query_ent, query_rel, answer_ent, paths, hops, splitLabel], axis=1)
+    new_df = pd.concat([questions, query_ent, answer_ent, paths, hops, splitLabel], axis=1)
     new_df = new_df.sample(frac=1).reset_index(drop=True) # Shuffle before splitting by label
 
     # Check if splitLabel column has meaningful values to guide the split
@@ -194,11 +187,8 @@ def process_and_cache_triviaqa_data(
     # Store the metadata
     metadata = {
         "question_tokenizer": question_tokenizer.name_or_path,
-        "answer_tokenizer": answer_tokenizer.name_or_path,
         "question_column": "Question",
-        "answer_column": "Answer",
         "query_entities_column": "Query-Entity",
-        "query_relations_column": "Query-Relation",
         "answer_entity_column": "Answer-Entity",
         "paths_column": "Paths",
         "hops_column": "Hops",
@@ -219,7 +209,6 @@ def load_qa_data(
     cached_metadata_path: str,
     raw_QAData_path,
     question_tokenizer_name: str,
-    answer_tokenizer_name: str,
     entity2id: Dict[str, int],
     relation2id: Dict[str, int], 
     logger: logging.Logger = None,
@@ -232,7 +221,7 @@ def load_qa_data(
             f"\033[93m Found cache for the QA data {cached_metadata_path} will load it instead of working on {raw_QAData_path}. \033[0m"
         )
         # Read the first line of the raw csv to count the number of columns
-        train_metadata = json.load(open(cached_metadata_path.format(question_tokenizer_name, answer_tokenizer_name)))
+        train_metadata = json.load(open(cached_metadata_path.format(question_tokenizer_name)))
         saved_paths: Dict[str, str] = train_metadata["saved_paths"]
 
         train_df = pd.read_parquet(saved_paths["train"])
@@ -252,13 +241,11 @@ def load_qa_data(
             f"\033[93m Did not find cache for the QA data {cached_metadata_path}. Will now process it from {raw_QAData_path} \033[0m"
         )
         question_tokenizer = AutoTokenizer.from_pretrained(question_tokenizer_name)
-        answer_tokenzier   = AutoTokenizer.from_pretrained(answer_tokenizer_name)
         df_split, train_metadata = ( # Includes shuffling
             process_and_cache_triviaqa_data(  # TOREM: Same here, might want to remove if not really used
                 raw_QAData_path,
                 cached_metadata_path,
                 question_tokenizer,
-                answer_tokenzier,
                 entity2id,
                 relation2id,
                 override_split=override_split,
