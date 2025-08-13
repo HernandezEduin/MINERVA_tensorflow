@@ -18,15 +18,13 @@ class AgentNLQ(object):
     - MLP policy network for action selection
     - Attention mechanism between query and candidate actions
     """
-    
-    def __init__(self, params: Dict[str, Any]) -> None:
+
+    def __init__(self, params: Dict[str, Any], entity_vocab: Dict[str, int], relation_vocab: Dict[str, int]) -> None:
         """
         Initialize the MINERVA agent with embedding tables and policy network.
         
         Args:
             params (Dict[str, Any]): Configuration dictionary containing:
-                - relation_vocab: Vocabulary mapping for relations
-                - entity_vocab: Vocabulary mapping for entities  
                 - embedding_size: Dimension of relation/entity embeddings
                 - hidden_size: LSTM hidden state dimension
                 - use_entity_embeddings: Whether to use entity embeddings
@@ -36,14 +34,16 @@ class AgentNLQ(object):
                 - test_rollouts: Number of rollouts during testing
                 - LSTM_layers: Number of LSTM layers in policy network
                 - batch_size: Training batch size
+            entity_vocab (Dict[str, int]): Vocabulary mapping for entities
+            relation_vocab (Dict[str, int]): Vocabulary mapping for relations
         """
 
-        self.action_vocab_size = len(params['relation_vocab'])
-        self.entity_vocab_size = len(params['entity_vocab'])
+        self.action_vocab_size = len(relation_vocab)
+        self.entity_vocab_size = len(entity_vocab)
         self.embedding_size = params['embedding_size']
         self.hidden_size = params['hidden_size']
-        self.ePAD = tf.constant(params['entity_vocab']['PAD'], dtype=tf.int32)
-        self.rPAD = tf.constant(params['relation_vocab']['PAD'], dtype=tf.int32)
+        self.ePAD = tf.constant(entity_vocab['PAD'], dtype=tf.int32)
+        self.rPAD = tf.constant(relation_vocab['PAD'], dtype=tf.int32)
         if params['use_entity_embeddings']:
             self.entity_initializer = tf.keras.initializers.GlorotUniform()
         else:
@@ -56,7 +56,7 @@ class AgentNLQ(object):
         self.LSTM_Layers = params['LSTM_layers']
         self.batch_size = params['batch_size'] * params['num_rollouts']
         self.dummy_start_label = tf.constant(
-            np.ones(self.batch_size, dtype='int64') * params['relation_vocab']['DUMMY_START_RELATION'])
+            np.ones(self.batch_size, dtype='int64') * relation_vocab['DUMMY_START_RELATION'])
 
         self.entity_embedding_size = self.embedding_size
         self.use_entity_embeddings = params['use_entity_embeddings']

@@ -20,7 +20,6 @@ import gc
 import resource
 import sys
 from code.model.baseline import ReactiveBaseline
-from code.model.nell_eval import nell_eval
 from scipy.special import logsumexp as lse
 from collections import defaultdict
 
@@ -43,8 +42,8 @@ class TrainerNLQ(object):
     - Comprehensive evaluation with beam search
     - Model checkpointing and restoration
     """
-    
-    def __init__(self, params: Dict[str, Any]) -> None:
+
+    def __init__(self, params: Dict[str, Any], entity_vocab: Dict[str, int], relation_vocab: Dict[str, int]) -> None:
         """
         Initialize the MINERVA trainer with configuration parameters.
         
@@ -58,26 +57,41 @@ class TrainerNLQ(object):
                 - Environment parameters (path length, rollouts, etc.)
                 - Evaluation parameters (beam size, metrics, etc.)
                 - Data paths and vocabulary mappings
+            entity_vocab (Dict[str, int]): Vocabulary mapping for entities
+            relation_vocab (Dict[str, int]): Vocabulary mapping for relations
         """
 
         # transfer parameters to self
         for key, val in params.items(): setattr(self, key, val)
 
-        self.agent = AgentNLQ(params)
+        # Agent and Environment
+        self.agent = AgentNLQ(
+            params, 
+            entity_vocab=entity_vocab, 
+            relation_vocab=relation_vocab
+        )
+
+        self.environment = EnvNLQ(
+            params, 
+            entity_vocab=entity_vocab, 
+            relation_vocab=relation_vocab, 
+            mode='train'
+        ) # shared environment accross modes, save space with graph builder and textual embeddings
+        
         self.save_path = None
-        self.environment = EnvNLQ(params, mode='train') # shared environment accross modes, save space with graph builder and textual embeddings
+
+        # Provide the vocab2id and id2vocab mappings
+        self.entity_vocab = entity_vocab
+        self.relation_vocab = relation_vocab
         self.rev_relation_vocab = self.environment.grapher.rev_relation_vocab
         self.rev_entity_vocab = self.environment.grapher.rev_entity_vocab
-        # self.train_environment = env(params, 'train')
-        # self.dev_test_environment = env(params, 'dev')
-        # self.test_test_environment = env(params, 'test')
-        # self.test_environment = self.dev_test_environment
-        # self.rev_relation_vocab = self.train_environment.grapher.rev_relation_vocab
-        # self.rev_entity_vocab = self.train_environment.grapher.rev_entity_vocab
-        self.max_hits_at_10 = 0
         self.ePAD = self.entity_vocab['PAD']
         self.rPAD = self.relation_vocab['PAD']
-        # optimize
+
+        # Evaluation
+        self.max_hits_at_10 = 0
+
+        # Optimization Algorithms
         self.baseline = ReactiveBaseline(l=self.Lambda)
         self.optimizer = tf.compat.v1.train.AdamOptimizer(self.learning_rate)
 
@@ -163,6 +177,8 @@ class TrainerNLQ(object):
         self.candidate_entity_sequence = []
         self.input_path = []
         self.entity_sequence = []
+
+        self.max_hits_at_10 = 0
 
         self.first_state_of_test = tf.compat.v1.placeholder(tf.bool, name="is_first_state_of_test")
         # self.query_relation = tf.compat.v1.placeholder(tf.int32, [None], name="query_relation")
@@ -748,7 +764,7 @@ if __name__ == '__main__':
 
     # read command line options
     options = read_options()
-    
+
     # Set logging
     logger.setLevel(logging.INFO)
     fmt = logging.Formatter('%(asctime)s: [ %(message)s ]',
@@ -759,17 +775,15 @@ if __name__ == '__main__':
     logfile = logging.FileHandler(options['log_file_name'], 'w')
     logfile.setFormatter(fmt)
     logger.addHandler(logfile)
-    # read the vocab files, it will be used by many classes hence global scope
-    logger.info('reading vocab files...')
-    options['relation_vocab'] = json.load(open(options['vocab_dir'] + '/relation_vocab.json'))
-    options['entity_vocab'] = json.load(open(options['vocab_dir'] + '/entity_vocab.json'))
-    logger.info('Reading mid to name map')
-    mid_to_word = {}
-    # with open('/iesl/canvas/rajarshi/data/RL-Path-RNN/FB15k-237/fb15k_names', 'r') as f:
-    #     mid_to_word = json.load(f)
-    logger.info('Done..')
-    logger.info('Total number of entities {}'.format(len(options['entity_vocab'])))
-    logger.info('Total number of relations {}'.format(len(options['relation_vocab'])))
+
+    # Reading the vocab files
+    logger.info('Reading vocab files (ent & rel to id)...')
+    relation_vocab = json.load(open(os.path.join(options['vocab_dir'], 'relation_vocab.json')))
+    entity_vocab = json.load(open(os.path.join(options['vocab_dir'], 'entity_vocab.json')))
+
+    logger.info('Total number of entities {}'.format(len(entity_vocab)))
+    logger.info('Total number of relations {}'.format(len(relation_vocab)))
+
     save_path = ''
     config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = False
@@ -778,9 +792,10 @@ if __name__ == '__main__':
     # Set seed for reproducibility
     set_seeds(options['seed'])
 
-    #Training
+    # Training a model from scratch
+    trainer = TrainerNLQ(options, entity_vocab=entity_vocab, relation_vocab=relation_vocab)
+    
     if not options['load_model']:
-        trainer = TrainerNLQ(options)
         with tf.compat.v1.Session(config=config) as sess:
             sess.run(trainer.initialize())
             trainer.initialize_pretrained_embeddings(sess=sess)
@@ -791,32 +806,27 @@ if __name__ == '__main__':
             output_dir = trainer.output_dir
 
         tf.compat.v1.reset_default_graph()
-    #Testing on test with best model
+    # Providing the configurations for best model
     else:
         logger.info("Skipping training")
         logger.info(f"Loading model from {options['model_load_dir']}")
 
-    trainer = TrainerNLQ(options)
-    if options['load_model']:
         save_path = options['model_load_dir']
-        path_logger_file = trainer.path_logger_file
-        output_dir = trainer.output_dir
+        path_logger_file = options['path_logger_file']
+        output_dir = options['output_dir']
+
+    # Evaluating Model
     with tf.compat.v1.Session(config=config) as sess:
-        trainer.initialize(restore=save_path, sess=sess)
+        trainer.initialize(restore=save_path, sess=sess) # check if it is fine to initialize an already trained model or if we need to create one before this line
 
-        trainer.test_rollouts = 100
+        trainer.test_rollouts = 100                      # set test rollouts to 100 for evaluation
 
-        os.makedirs(path_logger_file + "/" + "test_beam", exist_ok=True)
-        trainer.path_logger_file_ = path_logger_file + "/" + "test_beam" + "/paths"
-        with open(output_dir + '/scores.txt', 'a') as score_file:
+        # create files to store results
+        os.makedirs(os.path.join(path_logger_file, "test_beam"), exist_ok=True)
+        trainer.path_logger_file_ = os.path.join(path_logger_file, "test_beam", "paths")
+        with open(os.path.join(output_dir, 'scores.txt'), 'a') as score_file:
             score_file.write("Test (beam) scores with best model from " + save_path + "\n")
-        # trainer.test_environment = trainer.test_test_environment
-        # trainer.test_environment.test_rollouts = 100
 
+        # Perform Evaluation
         trainer.test(sess, beam=True, print_paths=True, save_model=False, mode='test')
-
-
-        print(options['nell_evaluation'])
-        if options['nell_evaluation'] == 1:
-            nell_eval(path_logger_file + "/" + "test_beam/" + "pathsanswers", trainer.data_input_dir+'/sort_test.pairs' )
 

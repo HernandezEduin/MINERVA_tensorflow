@@ -41,7 +41,7 @@ class EpisodeNLQ(object):
         else:
             self.num_rollouts = test_rollouts                                   # number of rollouts (simultaneous paths taken) during testing
         self.current_hop = 0                                                    # number of hops taken
-        _, question_embeddings, start_entities, end_entities = data     # question_tokens, question_embeddings, starting node, answer node
+        _, question_embeddings, start_entities, end_entities = data             # question_tokens, question_embeddings, starting node, answer node
         self.no_examples = start_entities.shape[0]                              # number of examples in the batch
         self.positive_reward = positive_reward                                  # reward for arriving at the answer (sparse, probably 1)
         self.negative_reward = negative_reward                                  # reward for not arriving at the answer
@@ -103,7 +103,7 @@ class EnvNLQ(object):
     """
     Environment for the RL agent, contains the knowledge graph and batch generator. Calls upon the episode for interaction
     """
-    def __init__(self, params, mode='train'):
+    def __init__(self, params, entity_vocab: Dict[str, int], relation_vocab: Dict[str, int], mode: str = 'train'):
         """
         Initialize the environment by storing initial parameters, setting up the knowledge graph, and initializing the batch generator.
         """
@@ -132,8 +132,8 @@ class EnvNLQ(object):
         # Initialize the knowledge graph
         self.grapher = RelationEntityGrapher(triple_store=os.path.join(input_dir, 'graph.txt'),
                                              max_num_actions=params['max_num_actions'],
-                                             entity_vocab=params['entity_vocab'],
-                                             relation_vocab=params['relation_vocab'])
+                                             entity_vocab=entity_vocab,
+                                             relation_vocab=relation_vocab)
 
     def get_episodes(self) -> Generator[EpisodeNLQ, None, None]:
         params = self.batch_size, self.path_len, self.num_rollouts, self.test_rollouts, self.positive_reward, self.negative_reward, self.mode
