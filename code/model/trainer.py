@@ -13,6 +13,7 @@ tf.compat.v1.disable_eager_execution()
 from code.model.agent import Agent
 from code.options import read_options
 from code.model.environment import env
+from code.data.utils import set_seeds
 import codecs
 from collections import defaultdict
 import gc
@@ -741,6 +742,8 @@ if __name__ == '__main__':
     config.gpu_options.allow_growth = False
     config.log_device_placement = False
 
+    # Set seed for reproducibility
+    set_seeds(options['seed'])
 
     #Training
     if not options['load_model']:
