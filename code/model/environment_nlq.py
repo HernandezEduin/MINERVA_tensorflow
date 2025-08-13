@@ -20,7 +20,7 @@ class Episode(object):
     def __init__(
             self, 
             graph: RelationEntityGrapher, 
-            data: Tuple[list, tf.Tensor, np.ndarray, np.ndarray], 
+            data: Tuple[list, np.ndarray, np.ndarray, np.ndarray], 
             params: Dict[str, Any]
         ):
         """
@@ -48,7 +48,7 @@ class Episode(object):
         self.start_entities = start_entities
         self.end_entities = end_entities
         self.current_entities = np.array(start_entities)                        # make a copy of start entities (non-addressable)
-        self.question_embeddings = tf.repeat(question_embeddings, repeats=self.num_rollouts, axis=0)     # repeat question embeddings for each rollout (batch_size*num_rollouts, hidden dim), repeats the element after itself
+        self.question_embeddings = np.repeat(question_embeddings, self.num_rollouts, axis=0)     # repeat question embeddings for each rollout (batch_size*num_rollouts, hidden dim), repeats the element after itself
 
         # extract the next possible actions
         next_actions = self.grapher.return_next_raw_actions(self.current_entities)
