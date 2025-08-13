@@ -1,6 +1,8 @@
 from __future__ import absolute_import
 from __future__ import division
 
+import os
+
 import numpy as np
 import tensorflow as tf
 
@@ -12,7 +14,7 @@ from typing import Dict, Any, Tuple, Generator
 
 logger = logging.getLogger()
 
-class Episode(object):
+class EpisodeNLQ(object):
     """
     Class representing a single episode of interaction with the environment.
     """
@@ -32,14 +34,14 @@ class Episode(object):
         for improved training efficiency.
         """
         self.grapher = graph  # environment graph containing the neighborhood of the current position + possible action
-        self.batch_size, self.path_len, num_rollouts, test_rollouts, positive_reward, negative_reward, mode, batcher = params # parameters for episode
+        self.batch_size, self.path_len, num_rollouts, test_rollouts, positive_reward, negative_reward, mode = params # parameters for episode
         self.mode = mode                                                        # evaluation mode
         if self.mode == 'train':
             self.num_rollouts = num_rollouts                                    # number of rollouts (simultaneous paths taken) during training
         else:
             self.num_rollouts = test_rollouts                                   # number of rollouts (simultaneous paths taken) during testing
         self.current_hop = 0                                                    # number of hops taken
-        questions, question_embeddings, start_entities, end_entities = data     # question_tokens, question_embeddings, starting node, answer node
+        _, question_embeddings, start_entities, end_entities = data     # question_tokens, question_embeddings, starting node, answer node
         self.no_examples = start_entities.shape[0]                              # number of examples in the batch
         self.positive_reward = positive_reward                                  # reward for arriving at the answer (sparse, probably 1)
         self.negative_reward = negative_reward                                  # reward for not arriving at the answer
@@ -97,7 +99,7 @@ class Episode(object):
         return self.state
 
 
-class env(object):
+class EnvNLQ(object):
     """
     Environment for the RL agent, contains the knowledge graph and batch generator. Calls upon the episode for interaction
     """
@@ -128,19 +130,34 @@ class env(object):
         self.total_no_examples = self.batcher.get_question_num()    # total number of examples in the dataset
 
         # Initialize the knowledge graph
-        self.grapher = RelationEntityGrapher(triple_store=params['data_input_dir'] + '/' + 'graph.txt',
+        self.grapher = RelationEntityGrapher(triple_store=os.path.join(input_dir, 'graph.txt'),
                                              max_num_actions=params['max_num_actions'],
                                              entity_vocab=params['entity_vocab'],
                                              relation_vocab=params['relation_vocab'])
 
-    def get_episodes(self) -> Generator[Episode, None, None]:
-        params = self.batch_size, self.path_len, self.num_rollouts, self.test_rollouts, self.positive_reward, self.negative_reward, self.mode, self.batcher
+    def get_episodes(self) -> Generator[EpisodeNLQ, None, None]:
+        params = self.batch_size, self.path_len, self.num_rollouts, self.test_rollouts, self.positive_reward, self.negative_reward, self.mode
         if self.mode == 'train':
             for data in self.batcher.yield_next_batch_train():
 
-                yield Episode(self.grapher, data, params)
+                yield EpisodeNLQ(self.grapher, data, params)
         else:
             for data in self.batcher.yield_next_batch_test():
                 if data == None:
                     return
-                yield Episode(self.grapher, data, params)
+                yield EpisodeNLQ(self.grapher, data, params)
+
+    def change_mode(self, mode: str) -> None:
+        """
+        Change the mode of the environment (train/dev/test).
+        """
+        assert mode in ['train', 'dev', 'test'], f"Error! Invalid mode: {mode}"
+        self.mode = mode
+        self.batcher.set_mode(mode)
+        self.total_no_examples = self.batcher.get_question_num()  # update the total number of examples in the dataset
+    
+    def change_test_rollouts(self, test_rollouts: int) -> None:
+        """
+        Changes the number of test rollouts.
+        """
+        self.test_rollouts = test_rollouts
