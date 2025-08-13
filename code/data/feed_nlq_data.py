@@ -75,7 +75,7 @@ class QuestionBatcher():
         """
         return len(self.eval_df)
 
-    def yield_next_batch_train(self) -> Generator[Tuple[list, tf.Tensor, np.ndarray, np.ndarray], None, None]:
+    def yield_next_batch_train(self) -> Generator[Tuple[list, np.ndarray, np.ndarray, np.ndarray], None, None]:
         assert self.mode == 'train', "Batcher is not in training mode"
         while True:
             batch_idx = np.random.randint(0, len(self.eval_df), size=self.batch_size)  # randomly samples batch indices
@@ -95,11 +95,11 @@ class QuestionBatcher():
                 cls_id=101,
                 sep_id=102,
                 max_length=128,
-            )
+            ).numpy()
 
             yield questions, question_embeddings, source_ent, answers
 
-    def yield_next_batch_test(self) -> Generator[Tuple[list, tf.Tensor, np.ndarray, np.ndarray], None, None]:
+    def yield_next_batch_test(self) -> Generator[Tuple[list, np.ndarray, np.ndarray, np.ndarray], None, None]:
         remaining_questions = len(self.eval_df)                                         # remaining number of questions for evaluation (starting value)
         current_idx = 0
         while True:
@@ -125,7 +125,7 @@ class QuestionBatcher():
                 cls_id=101,
                 sep_id=102,
                 max_length=128,
-            )
+            ).numpy()
 
             yield questions, question_embeddings, source_ent, answers
 

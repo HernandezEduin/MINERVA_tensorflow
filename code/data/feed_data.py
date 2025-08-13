@@ -1,12 +1,9 @@
-from tqdm import tqdm
-import json
 import numpy as np
 from collections import defaultdict
 import csv
-import random
 import os
 
-from typing import Generator, Dict, Any, Tuple
+from typing import Generator, Dict, Tuple
 
 class RelationEntityBatcher():
     """
@@ -138,5 +135,3 @@ class RelationEntityBatcher():
                 all_e2s.append(self.store_all_correct[(e1[i], r[i])])
             assert e1.shape[0] == e2.shape[0] == r.shape[0] == len(all_e2s)             # ensure all batches are the same size
             yield e1, r, e2, all_e2s                                                    # provide all necessary information for testing
-
-# TODO: Create an alternative class that allows batching for the nlp task in this file or separately. Should yield, e1 (id), e2 (id), and nlp question (tokens)
