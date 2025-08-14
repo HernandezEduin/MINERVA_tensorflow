@@ -88,9 +88,6 @@ class TrainerNLQ(object):
         self.ePAD = self.entity_vocab['PAD']
         self.rPAD = self.relation_vocab['PAD']
 
-        # Evaluation
-        self.max_hits_at_10 = 0
-
         # Optimization Algorithms
         self.baseline = ReactiveBaseline(l=self.Lambda)
         self.optimizer = tf.compat.v1.train.AdamOptimizer(self.learning_rate)
@@ -117,11 +114,12 @@ class TrainerNLQ(object):
         loss = tf.stack(self.per_example_loss, axis=1)  # [B, T]
 
         self.tf_baseline = self.baseline.get_baseline_value()
-        # self.pp = tf.Print(self.tf_baseline)
+
         # multiply with rewards
         final_reward = self.cum_discounted_reward - self.tf_baseline
-        # reward_std = tf.sqrt(tf.reduce_mean(tf.square(final_reward))) + 1e-5 # constant addded for numerical stability
+
         reward_mean, reward_var = tf.nn.moments(final_reward, axes=[0, 1])
+
         # Constant added for numerical stability
         reward_std = tf.sqrt(reward_var) + 1e-6
         final_reward =  tf.math.divide(final_reward - reward_mean, reward_std)
@@ -159,7 +157,7 @@ class TrainerNLQ(object):
         Initialize the TensorFlow computational graph and training components.
         
         Sets up all placeholders, variables, and operations needed for training:
-        - Input placeholders for candidate actions and queries
+        - Input placeholders for candidate actions and questions
         - Agent policy network and loss computation
         - Training operations with gradient clipping
         - Model saving and restoration capabilities
@@ -173,100 +171,100 @@ class TrainerNLQ(object):
         """
 
         logger.info("Creating TF graph...")
+
+        # Variables List
         self.candidate_relation_sequence = []
         self.candidate_entity_sequence = []
-        self.input_path = []
+        self.input_path = []                                                                                    # TODO: Remove if unused
         self.entity_sequence = []
 
-        self.max_hits_at_10 = 0
-
-        self.first_state_of_test = tf.compat.v1.placeholder(tf.bool, name="is_first_state_of_test")
-        # self.query_relation = tf.compat.v1.placeholder(tf.int32, [None], name="query_relation")
+        # Tensorflow Placeholders
         # New: external question embedding (e.g., BERT). Dim can be anything; we let dense learn to use it.
-        self.question_embedding = tf.compat.v1.placeholder(tf.float32, [None, None], name="question_embedding")
-        self.range_arr = tf.compat.v1.placeholder(tf.int32, shape=[None, ])
-        self.global_step = tf.Variable(0, trainable=False)
-        self.decaying_beta = tf.compat.v1.train.exponential_decay(self.beta, self.global_step,
-                                                   200, 0.90, staircase=False)
+        self.question_embedding = tf.compat.v1.placeholder(tf.float32, [None, None], name="question_embedding") # [B*num_rollouts, token_embedding_dim]
+        
+        self.first_state_of_test = tf.compat.v1.placeholder(tf.bool, name="is_first_state_of_test")             # TODO: Remove this if unused
+        self.range_arr = tf.compat.v1.placeholder(tf.int32, shape=[None, ])                                     # Range array for indexing operations.
+        self.global_step = tf.Variable(0, trainable=False)                                                      # Global training step counter
+        self.decaying_beta = tf.compat.v1.train.exponential_decay(
+            self.beta, 
+            self.global_step,
+            200, 
+            0.90, 
+            staircase=False
+        )                                                                                                       # Decaying beta for exploration
 
-        # to feed in the discounted reward tensor
+        # Cumulative Discounted Reward Tensor
         self.cum_discounted_reward = tf.compat.v1.placeholder(tf.float32, [None, self.path_length],
                                                     name="cumulative_discounted_reward")
 
-
-
         for t in range(self.path_length):
             next_rel = tf.compat.v1.placeholder(tf.int32, [None, self.max_num_actions],
-                                                   name=f"next_relations_{t}")
+                                                   name=f"next_relations_{t}")                                  # candidate relations from current entity  [B*num_rollouts,]
             next_ent = tf.compat.v1.placeholder(tf.int32, [None, self.max_num_actions],
-                                                     name=f"next_entities_{t}")
-            label_t = tf.compat.v1.placeholder(tf.int32, [None], name=f"input_label_relation_{t}")
-            cur_ent = tf.compat.v1.placeholder(tf.int32, [None, ], name=f"current_entities_{t}")
-            self.input_path.append(label_t)
-            self.candidate_relation_sequence.append(next_rel)
-            self.candidate_entity_sequence.append(next_ent)
-            self.entity_sequence.append(cur_ent)
+                                                     name=f"next_entities_{t}")                                 # candidate entities from current entity [B*num_rollouts,]
+            label_t = tf.compat.v1.placeholder(tf.int32, [None], name=f"input_label_relation_{t}")              # Ground truth action labels for training [B*num_rollouts,]
+            cur_ent = tf.compat.v1.placeholder(tf.int32, [None, ], name=f"current_entities_{t}")                # current locations [B*num_rollouts,]
+
+            self.input_path.append(label_t)                                                                     # TODO: Remove if unused
+            self.candidate_relation_sequence.append(next_rel)                                                   # list of candidate relations at each step
+            self.candidate_entity_sequence.append(next_ent)                                                     # list of candidate entities at each step
+            self.entity_sequence.append(cur_ent)                                                                # list of current entities at each step
+
         self.loss_before_reg = tf.constant(0.0)
+
+        # Building the computation graph for the agent, calls the forward method and within it, step
+        # Graph for calculating the per-example loss, per-example logits and the action to take
         self.per_example_loss, self.per_example_logits, self.action_idx = self.agent(
             self.candidate_relation_sequence,
             self.candidate_entity_sequence,
             self.entity_sequence,
-            self.input_path,
             self.question_embedding, 
             self.range_arr, 
-            self.first_state_of_test, 
             self.path_length
         )
 
-
+        # Graph for calculating the Loss
         self.loss_op = self.calc_reinforce_loss()
 
-        # backprop
+        # Graph for performing Backpropagation (RL-style)
         self.train_op = self.bp(self.loss_op)
 
         # Building the test graph
-        self.prev_state = tf.compat.v1.placeholder(tf.float32, self.agent.get_mem_shape(), name="memory_of_agent")
+        # TODO: Check if shape is correct for prev_shape
+        self.prev_state = tf.compat.v1.placeholder(tf.float32, self.agent.get_mem_shape(), name="memory_of_agent")  # LSTM Memory Shape (num lstm layers, 2, batch size, memory size)
         self.prev_relation = tf.compat.v1.placeholder(tf.int32, [None, ], name="previous_relation")
-        # self.query_embedding = tf.nn.embedding_lookup(self.agent.relation_lookup_table, self.query_relation)  # [B, 2D]
-        # self.query_embedding = self.question_embedding  # already [B, Q]
-        # layer_state = tf.unstack(self.prev_state, self.LSTM_layers)
-        # formated_state = [tf.unstack(s, 2) for s in layer_state]
         self.next_relations = tf.compat.v1.placeholder(tf.int32, shape=[None, self.max_num_actions])
         self.next_entities = tf.compat.v1.placeholder(tf.int32, shape=[None, self.max_num_actions])
-
         self.current_entities = tf.compat.v1.placeholder(tf.int32, shape=[None,])
-
-
 
         with tf.compat.v1.variable_scope("policy_steps_unroll") as scope:
             scope.reuse_variables()
             self.test_loss, test_state, self.test_logits, self.test_action_idx, self.chosen_relation = self.agent.step(
                 self.next_relations, 
                 self.next_entities, 
-                tf.unstack(self.prev_state, self.LSTM_layers), # verify this is the correct method instead of formated state
+                tf.unstack(self.prev_state, self.LSTM_layers),  # TODO: verify this is the correct method instead of formated state [tf.unstack(s, 2) for s in layer_state]
                 self.prev_relation, 
-                self.question_embedding,
+                self.question_embedding,                        # TODO: verify if we don't need to initialize a new tf question embedding for testing
                 self.current_entities, 
-                self.input_path[0], 
-                self.range_arr, 
-                self.first_state_of_test
+                self.range_arr                                  # Note: this tf variable is reused
             )
             self.test_state = tf.stack(test_state)
 
         logger.info('TF Graph ready (NLQ).')
-        self.model_saver = tf.compat.v1.train.Saver(max_to_keep=2)
+        self.model_saver = tf.compat.v1.train.Saver(max_to_keep=2)  # save the model checkpoints (best 2)
 
         # return the variable initializer Op.
         if not restore:
-            return tf.compat.v1.global_variables_initializer()
+            return tf.compat.v1.global_variables_initializer()      # initialize all variables
         else:
-            return  self.model_saver.restore(sess, restore)
+            return  self.model_saver.restore(sess, restore)         # restore checkpoint weights
 
 
 
     def initialize_pretrained_embeddings(self, sess: tf.compat.v1.Session) -> None:
         """
-        Load and initialize pretrained embeddings for entities and relations.
+        Load and initialize pretrained embeddings for entities, relations, 
+        and question projector.
         
         If pretrained embedding files are specified in the configuration,
         loads them and initializes the corresponding embedding lookup tables.
@@ -283,6 +281,14 @@ class TrainerNLQ(object):
             embeddings = np.loadtxt(open(self.pretrained_embeddings_entity))
             _ = sess.run((self.agent.entity_embedding_init),
                          feed_dict={self.agent.entity_embedding_placeholder: embeddings})
+        if self.pretrained_question_projector != '':
+            embeddings = np.loadtxt(open(self.pretrained_question_projector))
+            # Make sure the agent's question_proj has been called at least once to create variables
+            if self.agent.question_proj_init is not None:
+                _ = sess.run(self.agent.question_proj_init,
+                            feed_dict={self.agent.question_embedding_placeholder: embeddings})
+            else:
+                logger.warning("Question projector variables not yet created. Skipping pretrained initialization.")
 
     def bp(self, cost: tf.Tensor) -> tf.Operation:
         """
@@ -331,8 +337,7 @@ class TrainerNLQ(object):
         """
         running_add = np.zeros([rewards.shape[0]])  # [B]
         cum_disc_reward = np.zeros([rewards.shape[0], self.path_length])  # [B, T]
-        cum_disc_reward[:,
-        self.path_length - 1] = rewards  # set the last time step to the reward received at the last state
+        cum_disc_reward[:, self.path_length - 1] = rewards  # set the last time step to the reward received at the last state
         for t in reversed(range(self.path_length)):
             running_add = self.gamma * running_add + cum_disc_reward[:, t]
             cum_disc_reward[:, t] = running_add
@@ -350,21 +355,24 @@ class TrainerNLQ(object):
             Tuple containing:
                 - fetches: List of tensors to fetch during partial_run
                 - feeds: List of placeholder tensors for feeding data
-                - feed_dict: List of feed dictionaries for each time step
+                - feed_dict: List of feed dictionaries for each hop/step
         """
         # create fetches for partial_run_setup
         fetches = self.per_example_loss  + self.action_idx + [self.loss_op] + self.per_example_logits + [self.dummy]
-        feeds =  [self.first_state_of_test] + self.candidate_relation_sequence+ self.candidate_entity_sequence + self.input_path + \
+        feeds =  [self.first_state_of_test] + self.candidate_relation_sequence + self.candidate_entity_sequence + self.input_path + \
                 [self.question_embedding] + [self.cum_discounted_reward] + [self.range_arr] + self.entity_sequence
 
 
         feed_dict = [{} for _ in range(self.path_length)]
 
-        feed_dict[0][self.first_state_of_test] = False
-        feed_dict[0][self.query_text_embedding] = None
+        # Pass the memory address of the placeholder to the feed_dict
+        # The following placeholders that stay constant through the hops/steps:
+        feed_dict[0][self.first_state_of_test] = False # TODO: Remove this if unused
+        feed_dict[0][self.question_embedding] = None
         feed_dict[0][self.range_arr] = np.arange(self.batch_size*self.num_rollouts)
+        # The following placeholders vary across the hops/steps:
         for i in range(self.path_length):
-            feed_dict[i][self.input_path[i]] = np.zeros(self.batch_size * self.num_rollouts)  # placebo
+            feed_dict[i][self.input_path[i]] = np.zeros(self.batch_size * self.num_rollouts)  # TODO: Remove this if unused
             feed_dict[i][self.candidate_relation_sequence[i]] = None
             feed_dict[i][self.candidate_entity_sequence[i]] = None
             feed_dict[i][self.entity_sequence[i]] = None
@@ -373,8 +381,9 @@ class TrainerNLQ(object):
 
     def train(self, sess: tf.compat.v1.Session) -> None:
         """
-        Execute one epoch of MINERVA training using policy gradients.
-        
+        Execute multiple episodes of MINERVA training using policy gradients
+        until a max number of episodes have been completed.
+
         Performs the complete training loop:
         1. Iterates through all training episodes
         2. For each episode, unrolls the policy for path_length steps
@@ -390,91 +399,96 @@ class TrainerNLQ(object):
         Args:
             sess (tf.Session): Active TensorFlow session for training operations.
         """
-        # import pdb
-        # pdb.set_trace()
+        logger.info("Starting training...")
         fetches, feeds, feed_dict = self.gpu_io_setup()
 
         train_loss = 0.0
-        start_time = time.time()
         self.batch_counter = 0
-        self.environment.change_mode('train')
-        for episode in self.environment.get_episodes():
+        self.environment.change_mode('train')                           # Change environment mode to training
+        for episode in self.environment.get_episodes():                 # Provide the current episode, can be repeated
 
-            self.batch_counter += 1
-            h = sess.partial_run_setup(fetches=fetches, feeds=feeds)
-            # feed_dict[0][self.query_relation] = episode.get_query_relation()
-            # NEW: supply question embeddings for this batch (shape [B*num_rollouts, Q])
-            # You must prepare 'batch_question_embs' aligned with this episode's examples.
-            batch_qemb = episode.get_question_embedding()  # [B*num_rollouts, Q]
-            feed_dict[0][self.question_embedding] = batch_qemb
+            self.batch_counter += 1                                     # Increment batch count by 1 to eventually break the loop
+            h = sess.partial_run_setup(fetches=fetches, feeds=feeds)    # Set up graph from fetches and feeds
+            batch_qemb = episode.get_question_embedding()               # [B*num_rollouts, Q]
+            feed_dict[0][self.question_embedding] = batch_qemb          # Provide question embeddings for this batch
 
-            # get initial state
-            state = episode.get_state()
-            # for each time step
+            # Get Initial State
+            state = episode.get_state()                                 # Provide the initial State (current_entities, next_entities, next_relations)
+
+            # For each hop/step (tf)
             loss_before_regularization = []
             logits = []
             for i in range(self.path_length):
-                feed_dict[i][self.candidate_relation_sequence[i]] = state['next_relations']
-                feed_dict[i][self.candidate_entity_sequence[i]] = state['next_entities']
-                feed_dict[i][self.entity_sequence[i]] = state['current_entities']
+                feed_dict[i][self.candidate_relation_sequence[i]] = state['next_relations'] # Copy candidate relations
+                feed_dict[i][self.candidate_entity_sequence[i]] = state['next_entities']    # Copy candidate entities
+                feed_dict[i][self.entity_sequence[i]] = state['current_entities']           # Copy current position/ entity
+                
+                # Actual Execution of the TF Graph (Agent Call at hop i)
                 per_example_loss, per_example_logits, idx = sess.partial_run(
                     h, 
                     [self.per_example_loss[i], self.per_example_logits[i], self.action_idx[i]],
                     feed_dict=feed_dict[i]
                 )
+
+                # Store the results
                 loss_before_regularization.append(per_example_loss)
                 logits.append(per_example_logits)
-                # action = np.squeeze(action, axis=1)  # [B,]
+
+                # Interact with the environment by giving the action and receiving the next state
                 state = episode(idx)
+
+            # Process the results (numpy)
             loss_before_regularization = np.stack(loss_before_regularization, axis=1)
+            rewards = episode.get_reward()  # get environment reward by checking the current position and the answer's position
+            cum_discounted_reward = self.calc_cum_discounted_reward(rewards)  # computed cumulative discounted reward [B, T]
 
-            # get the final reward from the environment
-            rewards = episode.get_reward()
+            # Backpropagate the results
+            batch_total_loss, _ = sess.partial_run(
+                h,
+                [self.loss_op, self.dummy],
+                feed_dict={self.cum_discounted_reward: cum_discounted_reward}
+            )
 
-            # computed cumulative discounted reward
-            cum_discounted_reward = self.calc_cum_discounted_reward(rewards)  # [B, T]
-
-
-            # backprop
-            batch_total_loss, _ = sess.partial_run(h, [self.loss_op, self.dummy],
-                                                   feed_dict={self.cum_discounted_reward: cum_discounted_reward})
-
-            # print statistics
+            # Calculate the Loss and Average Reward
             train_loss = 0.98 * train_loss + 0.02 * batch_total_loss
             avg_reward = np.mean(rewards)
-            # now reshape the reward to [orig_batch_size, num_rollouts], I want to calculate for how many of the
-            # entity pair, atleast one of the path get to the right answer
-            reward_reshape = np.reshape(rewards, (self.batch_size, self.num_rollouts))  # [orig_batch, num_rollouts]
-            reward_reshape = np.sum(reward_reshape, axis=1)  # [orig_batch]
-            reward_reshape = (reward_reshape > 0)
-            num_ep_correct = np.sum(reward_reshape)
             if np.isnan(train_loss):
                 raise ArithmeticError("NaN loss")
 
-            logger.info("batch_counter: {0:4d}, num_hits: {1:7.4f}, avg. reward per batch {2:7.4f}, "
-                        "num_ep_correct {3:4d}, avg_ep_correct {4:7.4f}, train loss {5:7.4f}".
-                        format(self.batch_counter, np.sum(rewards), avg_reward, num_ep_correct,
-                               (num_ep_correct / self.batch_size),
-                               train_loss))
+            # Reshape the reward to [orig_batch_size, num_rollouts], to calculate for how many of the
+            # entity pair, at least one of the paths arrive at the correct answer
+            reward_reshape = np.reshape(rewards, (self.batch_size, self.num_rollouts))  # [orig_batch, num_rollouts]
+            reward_reshape = np.sum(reward_reshape, axis=1)                             # [orig_batch]
+            reward_reshape = (reward_reshape > 0)
+            num_ep_correct = np.sum(reward_reshape)
 
-            if self.batch_counter%self.eval_every == 0:
-                with open(self.output_dir + '/scores.txt', 'a') as score_file:
+            # Log the Statistics
+            logger.info(
+                f"batch_counter: {self.batch_counter:<4d}, num_hits: {np.sum(rewards):<7.4f}, "
+                f"avg. reward per batch: {avg_reward:<7.4f}, num_ep_correct: {num_ep_correct:<4d}, "
+                f"avg_ep_correct: {num_ep_correct / self.batch_size:<7.4f}, train_loss: {train_loss:<7.4f}"
+            )
+
+            # Store current performance, logger path, and evaluate with dev
+            if self.batch_counter % self.eval_every == 0:
+                with open(os.path.join(self.output_dir, 'scores.txt'), 'a') as score_file:
                     score_file.write("Score for iteration " + str(self.batch_counter) + "\n")
-                os.makedirs(self.path_logger_file + "/" + str(self.batch_counter), exist_ok=True)
-                self.path_logger_file_ = self.path_logger_file + "/" + str(self.batch_counter) + "/paths"
+                
+                os.makedirs(os.path.join(self.path_logger_file, str(self.batch_counter)), exist_ok=True)
+                self.path_logger_file_ = os.path.join(self.path_logger_file, str(self.batch_counter), "paths")
 
-
-
-                self.test(sess, beam=True, print_paths=False)
+                self.test(sess, beam=True, print_paths=False, mode='dev')
 
             logger.info('Memory usage: %s (kb)' % resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
 
+            # Clean up (garbage collector to free space)
             gc.collect()
-            if self.batch_counter >= self.total_iterations:
+
+            if self.batch_counter >= self.total_iterations: # if enough iterations have been completed, break out of training
                 break
 
     def test(self, sess: tf.compat.v1.Session, beam: bool = False, print_paths: bool = False, 
-             save_model: bool = True, auc: bool = False, mode='dev') -> Tuple[float, float, float, float, float]:
+             save_model: bool = True, mode='dev') -> Tuple[float, float, float, float, float]:
         """
         Evaluate the trained MINERVA agent on test data with multiple metrics.
         
@@ -485,7 +499,7 @@ class TrainerNLQ(object):
         - Path visualization and analysis
         - Model checkpointing based on performance
         
-        The evaluation uses multiple rollouts per query and aggregates results
+        The evaluation uses multiple rollouts per question and aggregates results
         to provide robust performance estimates across different reasoning paths.
         
         Args:
@@ -506,44 +520,48 @@ class TrainerNLQ(object):
                 - Hits@10: Fraction of queries with correct answer in top 10
                 - Hits@20: Fraction of queries with correct answer in top 20
         """
-        batch_counter = 0
-        paths = defaultdict(list)
-        answers = []
-        feed_dict = {}
-        all_final_reward_1 = 0
-        all_final_reward_3 = 0
-        all_final_reward_5 = 0
-        all_final_reward_10 = 0
-        all_final_reward_20 = 0
-        auc = 0
+        # NOTE: Hits@N are based on the num of rollouts, each respective rollout's scores, 
+        # and how many arrived at the correct answer, this is not Entity Ranking as in KGE
+        # Additionally assumes that there are at least 20 rollouts per question, 
+        # otherwise Hits@N is capped at the max number of rollouts, 
+        # i.e., rollout = 5, then Hits@5 = Hits@10 = Hits@20
 
+        paths = defaultdict(list)       # Store paths for each question if print_paths is True
+        answers = []                    # Store answers entity for each question if print_paths is True
+        feed_dict = {}                  # Feed dictionaries, gets updated each hop during evaluation
+        all_final_reward_1 = 0          # Overall results for hits@1
+        all_final_reward_3 = 0          # Overall results for hits@3
+        all_final_reward_5 = 0          # Overall results for hits@5
+        all_final_reward_10 = 0         # Overall results for hits@10
+        all_final_reward_20 = 0         # Overall results for hits@20
+        mrr = 0                         # Overall results for MRR
+        max_hits_at_10 = 0              # Condition for Saving Model
+
+
+        # Changing the environment to test/dev data and resetting values
         self.environment.change_mode(mode)
-        self.environment.change_test_rollouts(self.test_rollouts)
-        total_examples = self.environment.total_no_examples
+        self.environment.change_test_rollouts(self.test_rollouts)   # modifying the number of rollouts for evaluation
+        total_examples = self.environment.total_no_examples         # total number of questions
         for episode in tqdm(self.environment.get_episodes()):
-            batch_counter += 1
+            temp_batch_size = episode.no_examples                   # batch size, can vary in test due to the last batch
 
-            temp_batch_size = episode.no_examples
+            # Set Initial Beams Probs
+            beam_probs = np.zeros((temp_batch_size * self.test_rollouts, 1)) # Cumulative scores from previous steps [batch_size*k, 1]
 
-            # self.qr = episode.get_query_relation()
-            # feed_dict[self.query_relation] = self.qr
-
-            # set initial beam probs
-            beam_probs = np.zeros((temp_batch_size * self.test_rollouts, 1))
-            # get initial state
-            state = episode.get_state()
-            mem = self.agent.get_mem_shape()
-            agent_mem = np.zeros((mem[0], mem[1], temp_batch_size*self.test_rollouts, mem[3]) ).astype('float32')
-            previous_relation = np.ones((temp_batch_size * self.test_rollouts, ), dtype='int64') * self.relation_vocab[
-                'DUMMY_START_RELATION']
+            # Provide Initial Variables
+            state = episode.get_state()                             # Initial State (current_entities, next_entities, next_relations)
+            mem = self.agent.get_mem_shape()                        # LSTM Memory Shape (num lstm layers, 2, batch size, memory size)
+            agent_mem = np.zeros((mem[0], mem[1], temp_batch_size*self.test_rollouts, mem[3]), dtype='float32')
+            previous_relation = np.ones((temp_batch_size * self.test_rollouts, ), dtype='int64') * self.relation_vocab['DUMMY_START_RELATION']
             
             feed_dict = {
                 self.range_arr: np.arange(temp_batch_size * self.test_rollouts),
-                self.input_path[0]: np.zeros(temp_batch_size * self.test_rollouts),
-                self.first_state_of_test: True,
-                self.question_embedding: episode.get_question_embedding(),  # << embeddings
+                self.input_path[0]: np.zeros(temp_batch_size * self.test_rollouts),     # TODO: Remove this if unused
+                self.first_state_of_test: True,                                         # TODO: Remove this if unused
+                self.question_embedding: episode.get_question_embedding(),              # question embeddings
             }
 
+            # TODO: Remove this if it goes unused
             ####logger code####
             if print_paths:
                 self.entity_trajectory = []
@@ -552,8 +570,9 @@ class TrainerNLQ(object):
 
             self.log_probs = np.zeros((temp_batch_size*self.test_rollouts,)) * 1.0
 
-            # for each time step
+            # For each hop/step
             for i in range(self.path_length):
+                # Update the feed_dict with the current info
                 feed_dict.update({
                     self.next_relations: state['next_relations'],
                     self.next_entities: state['next_entities'],
@@ -562,96 +581,128 @@ class TrainerNLQ(object):
                     self.prev_relation: previous_relation
                 })
 
+                # Full execution of the TF graph (Agent Step)
+                # ? I have no idea how they decided with parts to execute
                 loss, agent_mem, test_scores, test_action_idx, chosen_relation = sess.run(
-                    [ self.test_loss, self.test_state, self.test_logits, self.test_action_idx, self.chosen_relation],
+                    [self.test_loss, self.test_state, self.test_logits, self.test_action_idx, self.chosen_relation],
                     feed_dict=feed_dict
                 )
 
-
+                # Perform beam search
+                # If beam is on, this will override the agent's actions based on agent's logits scores
+                # hence, the agent only calculates the action probability while beam predicts the best actions
                 if beam:
-                    k = self.test_rollouts
-                    new_scores = test_scores + beam_probs
-                    if i == 0:
-                        idx = np.argsort(new_scores)
-                        idx = idx[:, -k:]
+                    # Instead of greedily selecting the single best action at each step, 
+                    # beam search maintains multiple promising paths simultaneously 
+                    # to find better reasoning chains.
+                    k = self.test_rollouts                  # Beam size (number of paths to maintain)
+                    new_scores = test_scores + beam_probs   # Combine current action scores with cumulative beam scores [batch_size*k, max_actions]
+                    if i == 0:                              # At step 0, all beams start from the same state, so we need to select diverse starting paths.
+                        idx = np.argsort(new_scores)        # Sort all scores
+                        idx = idx[:, -k:]                   # Take top-k indices
                         ranged_idx = np.tile([b for b in range(k)], temp_batch_size)
                         idx = idx[np.arange(k*temp_batch_size), ranged_idx]
                     else:
-                        idx = self.top_k(new_scores, k)
+                        idx = self.top_k(new_scores, k)     # Use general top-k selection to select best paths from the expanded search space.
 
-                    y = idx//self.max_num_actions
-                    x = idx%self.max_num_actions
+                    y = idx//self.max_num_actions           # Which beam/path each selected action comes from
+                    x = idx%self.max_num_actions            # Which action within that beam
 
-                    y += np.repeat([b*k for b in range(temp_batch_size)], k)
+                    y += np.repeat([b*k for b in range(temp_batch_size)], k) # beam index adjustment for each question
+                    
+                    # Reorders all state information to match the selected beams
                     state['current_entities'] = state['current_entities'][y]
                     state['next_relations'] = state['next_relations'][y,:]
-                    state['next_entities'] = state['next_entities'][y, :]
+                    state['next_entities'] = state['next_entities'][y,:]
                     agent_mem = agent_mem[:, :, y, :]
-                    test_action_idx = x
+                    
+                    # Override Action Selection
+                    test_action_idx = x # Selected actions
                     chosen_relation = state['next_relations'][np.arange(temp_batch_size*k), x]
+
+                    # Score Tracking
                     beam_probs = new_scores[y, x]
                     beam_probs = beam_probs.reshape((-1, 1))
+
+                    # Path History Maintenance
                     if print_paths:
                         for j in range(i):
                             self.entity_trajectory[j] = self.entity_trajectory[j][y]
                             self.relation_trajectory[j] = self.relation_trajectory[j][y]
-                previous_relation = chosen_relation
-
+                
                 ####logger code####
-                if print_paths:
+                if print_paths: # Store the current path before the environment update
                     self.entity_trajectory.append(state['current_entities'])
                     self.relation_trajectory.append(chosen_relation)
                 ####################
+
+                # Update the states for the next hop
+                previous_relation = chosen_relation
                 state = episode(test_action_idx)
+
+                # Aggregate Results
                 self.log_probs += test_scores[np.arange(self.log_probs.shape[0]), test_action_idx]
+            
+            # After the last hop
+            # If beam search was used, override the probabilities
             if beam:
                 self.log_probs = beam_probs
 
             ####Logger code####
+            if print_paths: # Store the current paths (entity only)
+                self.entity_trajectory.append(state['current_entities'])
 
-            if print_paths:
-                self.entity_trajectory.append(
-                    state['current_entities'])
-
-
-            # ask environment for final reward
+            # Calculate the final reward
             rewards = episode.get_reward()  # [B*test_rollouts]
+
+            # Reshape the reward to [orig_batch_size, num_rollouts], to calculate for how many of the
+            # entity pair, at least one of the paths arrive at the correct answer
             reward_reshape = np.reshape(rewards, (temp_batch_size, self.test_rollouts))  # [orig_batch, test_rollouts]
             self.log_probs = np.reshape(self.log_probs, (temp_batch_size, self.test_rollouts))
             sorted_indx = np.argsort(-self.log_probs)
+            
+            # Calculate the episode's metrics based on the sorted indices
             final_reward_1 = 0
             final_reward_3 = 0
             final_reward_5 = 0
             final_reward_10 = 0
             final_reward_20 = 0
-            AP = 0
+            final_mrr = 0
+
+            # Get current and start entities
             ce = episode.state['current_entities'].reshape((temp_batch_size, self.test_rollouts))
             se = episode.start_entities.reshape((temp_batch_size, self.test_rollouts))
+            
+            # Evaluate each sample/question's performance
             for b in range(temp_batch_size):
                 answer_pos = None
                 seen = set()
-                pos=0
-                if self.pool == 'max':
-                    for r in sorted_indx[b]:
-                        if reward_reshape[b,r] == self.positive_reward:
-                            answer_pos = pos
+                pos = 0
+
+                if self.pool == 'max':          # Evaluation done based on best performing rollout
+                    for r in sorted_indx[b]:    # Go through paths sorted by score (highest first)
+                        if reward_reshape[b,r] == self.positive_reward:  # Found correct answer
+                            answer_pos = pos      # answer position is the current rank
                             break
-                        if ce[b, r] not in seen:
+                        if ce[b, r] not in seen:  # Only count unique entities
                             seen.add(ce[b, r])
-                            pos += 1
-                # TODO: check if we need an elif here
-                if self.pool == 'sum':
+                            pos += 1              # increment rank as penalty
+                elif self.pool == 'sum':        # Evaluation done based on all rollouts
                     scores = defaultdict(list)
                     answer = ''
                     for r in sorted_indx[b]:
-                        scores[ce[b,r]].append(self.log_probs[b,r])
+                        scores[ce[b,r]].append(self.log_probs[b,r])     # Collect all scores for each entity
                         if reward_reshape[b,r] == self.positive_reward:
-                            answer = ce[b,r]
+                            answer = ce[b,r]                            # Remember which entity is correct
+                    
+                    # Use log-sum-exp to combine scores for each entity
                     final_scores = {e: lse(v) for e,v in scores.items()}
                     sorted_answers = sorted(final_scores, key=final_scores.get, reverse=True)
                     answer_pos = sorted_answers.index(answer) if answer in sorted_answers else None
 
+                # Evaluate the answer position
                 if answer_pos is not None:
+                    final_mrr += 1.0/((answer_pos+1))
                     if answer_pos < 20:
                         final_reward_20 += 1
                         if answer_pos < 10:
@@ -662,51 +713,64 @@ class TrainerNLQ(object):
                                     final_reward_3 += 1
                                     if answer_pos < 1:
                                         final_reward_1 += 1
-                if answer_pos == None:
-                    AP += 0
                 else:
-                    AP += 1.0/((answer_pos+1))
-                # if print_paths:
-                #     qr = self.train_environment.grapher.rev_relation_vocab[self.qr[b * self.test_rollouts]]
-                #     start_e = self.rev_entity_vocab[episode.start_entities[b * self.test_rollouts]]
-                #     end_e = self.rev_entity_vocab[episode.end_entities[b * self.test_rollouts]]
-                #     paths[str(qr)].append(str(start_e) + "\t" + str(end_e) + "\n")
-                #     paths[str(qr)].append("Reward:" + str(1 if answer_pos != None and answer_pos < 10 else 0) + "\n")
-                #     for r in sorted_indx[b]:
-                #         indx = b * self.test_rollouts + r
-                #         if rewards[indx] == self.positive_reward:
-                #             rev = 1
-                #         else:
-                #             rev = -1
-                #         answers.append(self.rev_entity_vocab[se[b,r]]+'\t'+ self.rev_entity_vocab[ce[b,r]]+'\t'+ str(self.log_probs[b,r])+'\n')
-                #         paths[str(qr)].append(
-                #             '\t'.join([str(self.rev_entity_vocab[e[indx]]) for e in
-                #                        self.entity_trajectory]) + '\n' + '\t'.join(
-                #                 [str(self.rev_relation_vocab[re[indx]]) for re in self.relation_trajectory]) + '\n' + str(
-                #                 rev) + '\n' + str(
-                #                 self.log_probs[b, r]) + '\n___' + '\n')
-                #     paths[str(qr)].append("#####################\n")
+                    final_mrr += 0
+                
+                # Comprehensive reasoning path report
+                if print_paths:
+                    # Retrive Sample's context
+                    question_txt = self.environment.batcher.translate_questions([episode.question_tokens[b]])[0]    # Convert question back to text
+                    start_e = self.rev_entity_vocab[episode.start_entities[b * self.test_rollouts]]                 # Map id to entity for source node
+                    end_e = self.rev_entity_vocab[episode.end_entities[b * self.test_rollouts]]                     # Map id to entity for answer node
+                    
+                    # Question Header Information
+                    paths[question_txt].append(str(start_e) + "\t" + str(end_e) + "\n")
+                    paths[question_txt].append("Reward:" + str(1 if answer_pos != None and answer_pos < 10 else 0) + "\n") # Answered correctly if top10
+                    for r in sorted_indx[b]:                        # Go through paths sorted by score (highest first)
+                        indx = b * self.test_rollouts + r           # Convert to global index
+                        if rewards[indx] == self.positive_reward:
+                            rev = 1                                 # This path succeeded
+                        else:
+                            rev = -1                                # This path failed
 
+                        # Answer Summary (StartEntity, EndEntity, PathScore)
+                        answers.append(self.rev_entity_vocab[se[b,r]]+'\t'+ self.rev_entity_vocab[ce[b,r]]+'\t'+ str(self.log_probs[b,r])+'\n')
+
+                        # Detailed Path Trajectory (entities sequence, relation sequence, success indicator, path score)
+                        paths[question_txt].append(
+                            '\t'.join([str(self.rev_entity_vocab[e[indx]]) for e in
+                                       self.entity_trajectory]) + '\n' + '\t'.join(
+                                [str(self.rev_relation_vocab[re[indx]]) for re in self.relation_trajectory]) + '\n' + str(
+                                rev) + '\n' + str(
+                                self.log_probs[b, r]) + '\n___' + '\n')
+
+                    paths[question_txt].append("#####################\n") # clear distinction for different attempts of same question
+
+            # Update overall rewards (Episode-wise)
             all_final_reward_1 += final_reward_1
             all_final_reward_3 += final_reward_3
             all_final_reward_5 += final_reward_5
             all_final_reward_10 += final_reward_10
             all_final_reward_20 += final_reward_20
-            auc += AP
+            mrr += final_mrr
 
+        # Update total rewards
         all_final_reward_1 /= total_examples
         all_final_reward_3 /= total_examples
         all_final_reward_5 /= total_examples
         all_final_reward_10 /= total_examples
         all_final_reward_20 /= total_examples
-        auc /= total_examples
-        if save_model:
-            if all_final_reward_10 >= self.max_hits_at_10:
-                self.max_hits_at_10 = all_final_reward_10
-                self.save_path = self.model_saver.save(sess, self.model_dir + "model" + '.ckpt')
+        mrr /= total_examples
 
+        # Save best performing model based on hits@10
+        if save_model:
+            if all_final_reward_10 >= max_hits_at_10:
+                max_hits_at_10 = all_final_reward_10 # Update max_hits_at_10
+                self.save_path = self.model_saver.save(sess, self.model_dir + "model.ckpt")
+
+        # Store the paths for each question
         if print_paths:
-            logger.info("[ printing paths at {} ]".format(self.output_dir+'/test_beam/'))
+            logger.info(f"[ printing paths at {os.path.join(self.output_dir, 'test_beam')} ]")
             for q in paths:
                 j = q.replace('/', '-')
                 with codecs.open(self.path_logger_file_ + '_' + j, 'a', 'utf-8') as pos_file:
@@ -716,27 +780,27 @@ class TrainerNLQ(object):
                 for a in answers:
                     answer_file.write(a)
 
-        with open(self.output_dir + '/scores.txt', 'a') as score_file:
-            score_file.write("Hits@1: {0:7.4f}".format(all_final_reward_1))
+        with open(os.path.join(self.output_dir, 'scores.txt'), 'a') as score_file:
+            score_file.write(f"Hits@1: {all_final_reward_1:7.4f}")
             score_file.write("\n")
-            score_file.write("Hits@3: {0:7.4f}".format(all_final_reward_3))
+            score_file.write(f"Hits@3: {all_final_reward_3:7.4f}")
             score_file.write("\n")
-            score_file.write("Hits@5: {0:7.4f}".format(all_final_reward_5))
+            score_file.write(f"Hits@5: {all_final_reward_5:7.4f}")
             score_file.write("\n")
-            score_file.write("Hits@10: {0:7.4f}".format(all_final_reward_10))
+            score_file.write(f"Hits@10: {all_final_reward_10:7.4f}")
             score_file.write("\n")
-            score_file.write("Hits@20: {0:7.4f}".format(all_final_reward_20))
+            score_file.write(f"Hits@20: {all_final_reward_20:7.4f}")
             score_file.write("\n")
-            score_file.write("auc: {0:7.4f}".format(auc))
+            score_file.write(f"MRR: {mrr:7.4f}")
             score_file.write("\n")
-            score_file.write("\n")
+            score_file.write("\n") 
 
-        logger.info("Hits@1: {0:7.4f}".format(all_final_reward_1))
-        logger.info("Hits@3: {0:7.4f}".format(all_final_reward_3))
-        logger.info("Hits@5: {0:7.4f}".format(all_final_reward_5))
-        logger.info("Hits@10: {0:7.4f}".format(all_final_reward_10))
-        logger.info("Hits@20: {0:7.4f}".format(all_final_reward_20))
-        logger.info("auc: {0:7.4f}".format(auc))
+        logger.info(f"Hits@1: {all_final_reward_1:7.4f}")
+        logger.info(f"Hits@3: {all_final_reward_3:7.4f}")
+        logger.info(f"Hits@5: {all_final_reward_5:7.4f}")
+        logger.info(f"Hits@10: {all_final_reward_10:7.4f}")
+        logger.info(f"Hits@20: {all_final_reward_20:7.4f}")
+        logger.info(f"MRR: {mrr:7.4f}")
 
     def top_k(self, scores: np.ndarray, k: int) -> np.ndarray:
         """
@@ -760,7 +824,7 @@ class TrainerNLQ(object):
         idx = idx[:, -k:]  # take the last k highest indices # [B , k]
         return idx.reshape((-1))
 
-if __name__ == '__main__':
+if __name__ == '__main__':##
 
     # read command line options
     options = read_options()
@@ -792,9 +856,10 @@ if __name__ == '__main__':
     # Set seed for reproducibility
     set_seeds(options['seed'])
 
-    # Training a model from scratch
+
     trainer = TrainerNLQ(options, entity_vocab=entity_vocab, relation_vocab=relation_vocab)
     
+    # Training a model from scratch
     if not options['load_model']:
         with tf.compat.v1.Session(config=config) as sess:
             sess.run(trainer.initialize())
