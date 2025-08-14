@@ -430,7 +430,7 @@ class Trainer(object):
                 break
 
     def test(self, sess: tf.compat.v1.Session, beam: bool = False, print_paths: bool = False, 
-             save_model: bool = True, auc: bool = False) -> Tuple[float, float, float, float, float]:
+             save_model: bool = True) -> Tuple[float, float, float, float, float]:
         """
         Evaluate the trained MINERVA agent on test data with multiple metrics.
         
@@ -452,7 +452,6 @@ class Trainer(object):
                 Defaults to False.
             save_model (bool, optional): Whether to save model if performance improves.
                 Defaults to True.
-            auc (bool, optional): Whether to compute AUC metrics. Defaults to False.
                 
         Returns:
             Tuple[float, float, float, float, float]: Performance metrics:
