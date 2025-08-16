@@ -1,5 +1,7 @@
 import argparse
 
+import tensorflow as tf
+
 from code.data.feed_nlq_data import QuestionBatcher
 
 def get_args() -> argparse.Namespace:
@@ -36,6 +38,9 @@ if __name__ == "__main__":
         force_data_prepro = args.force_data_prepro,
         mode = args.mode
     )
+
+    # Testing Disabling Eager Execution for MINERVA's compatibility
+    tf.compat.v1.disable_eager_execution()
 
     next_batch_func = batcher.yield_next_batch_train if args.mode == 'train' else batcher.yield_next_batch_test
     max_questions = batcher.get_question_num()
