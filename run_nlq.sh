@@ -7,7 +7,8 @@ cmd="python code/model/trainer_nlq.py --base_output_dir $base_output_dir --path_
     --batch_size $batch_size --beta $beta --Lambda $Lambda --use_entity_embeddings $use_entity_embeddings \
     --train_entity_embeddings $train_entity_embeddings --train_relation_embeddings $train_relation_embeddings \
     --data_input_dir $data_input_dir --vocab_dir $vocab_dir --model_load_dir $model_load_dir --load_model $load_model --total_iterations $total_iterations \
-    --raw_QAData_path $raw_QAData_path --cached_QAMetaData_path $cached_QAMetaData_path --question_tokenizer_name $question_tokenizer_name"
+    --raw_QAData_path $raw_QAData_path --cached_QAMetaData_path $cached_QAMetaData_path --question_tokenizer_name $question_tokenizer_name
+    --eval_every $eval_every"
 
 echo "Executing $cmd"
 
