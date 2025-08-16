@@ -2,7 +2,7 @@
 
 data_input_dir="datasets/data_preprocessed/kinshiphinton/"
 vocab_dir="datasets/data_preprocessed/kinshiphinton/vocab"
-total_iterations=2000
+total_iterations=200
 eval_every=10
 path_length=2
 hidden_size=50
@@ -17,5 +17,5 @@ base_output_dir="output/kinshiphinton/"
 load_model=0
 model_load_dir="null"
 raw_QAData_path="./datasets/data_preprocessed/kinshiphinton/kinship_hinton_qa_2hop.csv"
-cached_QAMetaData_path="./.cache/itl/kinship_hinton_qa_1hop.json"
+cached_QAMetaData_path="./.cache/itl/kinship_hinton_qa_2hop.json"
 question_tokenizer_name="bert-base-uncased"
