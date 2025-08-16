@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Tuple, Optional, Union
 
 from code.model.agent_nlq import AgentNLQ
 from code.model.environment_nlq import EnvNLQ
+from code.data.embedding_server import EmbeddingServer
 from code.options import read_options_nlq
 from code.data.utils import set_seeds
 import codecs
@@ -42,7 +43,13 @@ class TrainerNLQ(object):
     - Model checkpointing and restoration
     """
 
-    def __init__(self, params: Dict[str, Any], entity_vocab: Dict[str, int], relation_vocab: Dict[str, int]) -> None:
+    def __init__(
+            self,
+            params: Dict[str, Any],
+            entity_vocab: Dict[str, int],
+            relation_vocab: Dict[str, int],
+            embedding_server: EmbeddingServer = None
+        ) -> None:
         """
         Initialize the MINERVA trainer with configuration parameters.
         
@@ -67,7 +74,8 @@ class TrainerNLQ(object):
             params, 
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab, 
-            mode='train'
+            mode='train',
+            embedding_server=embedding_server
         ) # shared environment accross modes, save space with graph builder and textual embeddings
         
         # Disable Eager Execution for the rest of the code
@@ -868,11 +876,16 @@ if __name__ == '__main__':##
     # Set seed for reproducibility
     set_seeds(options['seed'])
 
+    embedding_server = EmbeddingServer(options['question_tokenizer_name'])
 
-    trainer = TrainerNLQ(options, entity_vocab=entity_vocab, relation_vocab=relation_vocab)
-    
     # Training a model from scratch
     if not options['load_model']:
+        trainer = TrainerNLQ(
+            options, 
+            entity_vocab=entity_vocab, 
+            relation_vocab=relation_vocab, 
+            embedding_server=embedding_server
+        )
         with tf.compat.v1.Session(config=config) as sess:
             sess.run(trainer.initialize())
             trainer.initialize_pretrained_embeddings(sess=sess)
@@ -892,7 +905,14 @@ if __name__ == '__main__':##
         path_logger_file = options['path_logger_file']
         output_dir = options['output_dir']
 
-    # Evaluating Model
+    # Evaluating Model, will require new initialization to avoid graph errors
+    trainer = TrainerNLQ(
+        options, 
+        entity_vocab=entity_vocab, 
+        relation_vocab=relation_vocab, 
+        embedding_server=embedding_server
+    )
+    
     with tf.compat.v1.Session(config=config) as sess:
         trainer.initialize(restore=save_path, sess=sess) # check if it is fine to initialize an already trained model or if we need to create one before this line
 
@@ -906,4 +926,6 @@ if __name__ == '__main__':##
 
         # Perform Evaluation
         trainer.test(sess, beam=True, print_paths=True, save_model=False, mode='test')
-
+    
+    logging.info(f"Evaluation completed. Closing Server")
+    embedding_server.close()  # Close the embedding server connection

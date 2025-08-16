@@ -2,8 +2,6 @@ import numpy as np
 import tensorflow as tf
 from typing import Dict, Any, List, Tuple, Union, Optional
 
-# tf.compat.v1.disable_eager_execution()
-
 class AgentNLQ(object):
     """
     Reinforcement learning agent for knowledge graph reasoning using MINERVA.

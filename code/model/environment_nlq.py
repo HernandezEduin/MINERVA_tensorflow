@@ -8,6 +8,7 @@ import tensorflow as tf
 
 from code.data.feed_nlq_data import QuestionBatcher
 from code.data.grapher import RelationEntityGrapher
+from code.data.embedding_server import EmbeddingServer
 import logging
 
 from typing import Dict, Any, Tuple, Generator
@@ -104,7 +105,14 @@ class EnvNLQ(object):
     """
     Environment for the RL agent, contains the knowledge graph and batch generator. Calls upon the episode for interaction
     """
-    def __init__(self, params, entity_vocab: Dict[str, int], relation_vocab: Dict[str, int], mode: str = 'train'):
+    def __init__(
+            self, 
+            params, 
+            entity_vocab: Dict[str, int], 
+            relation_vocab: Dict[str, int], 
+            mode: str = 'train', 
+            embedding_server: EmbeddingServer = None
+        ):
         """
         Initialize the environment by storing initial parameters, setting up the knowledge graph, and initializing the batch generator.
         """
@@ -125,7 +133,8 @@ class EnvNLQ(object):
             cached_QAMetaData_path=params['cached_QAMetaData_path'],
             raw_QAData_path=params['raw_QAData_path'],
             force_data_prepro=False,
-            mode=self.mode
+            mode=self.mode,
+            embedding_server=embedding_server,
         )
 
         self.total_no_examples = self.batcher.get_question_num()    # total number of examples in the dataset

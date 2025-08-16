@@ -159,28 +159,4 @@ class QuestionBatcher():
         Translate question IDs into their corresponding question texts.
         """
         return [self.question_tokenizer.decode(question) for question in questions]
-
-    def __enter__(self):
-        """
-        Enter the runtime context related to this object.
-        """
-        return self
-
-    def __exit__(self, exc_type: type, exc_value: Exception, traceback: TracebackType):
-        """
-        Exit the runtime context related to this object.
-        """
-        # Clean up the embedding server when exiting the batcher.
-        if getattr(self, "embedding_server", None):
-            self.embedding_server.close()
-
-    def __del__(self):
-        """
-        Destructor for the class.
-        """
-        # safety net
-        try:
-            if getattr(self, "embedding_server", None):
-                self.embedding_server.close()
-        except Exception:
-            pass
+    
