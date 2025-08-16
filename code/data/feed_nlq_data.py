@@ -115,6 +115,9 @@ class QuestionBatcher():
         remaining_questions = len(self.eval_df)                                         # remaining number of questions for evaluation (starting value)
         current_idx = 0
         while True:
+            if remaining_questions==0:
+                return
+            
             if remaining_questions - self.batch_size > 0:                                 # so long as the number of remaining questions is bigger than the batch size
                 batch_idx = np.arange(current_idx, current_idx+self.batch_size)         # extract the batch indices
                 current_idx += self.batch_size                                          # increment the current index counter

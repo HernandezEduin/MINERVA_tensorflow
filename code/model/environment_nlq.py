@@ -41,7 +41,7 @@ class EpisodeNLQ(object):
         else:
             self.num_rollouts = test_rollouts                                   # number of rollouts (simultaneous paths taken) during testing
         self.current_hop = 0                                                    # number of hops taken
-        _, question_embeddings, start_entities, end_entities = data             # question_tokens, question_embeddings, starting node, answer node
+        q_tokens, question_embeddings, start_entities, end_entities = data      # question_tokens, question_embeddings, starting node, answer node
         self.no_examples = start_entities.shape[0]                              # number of examples in the batch
         self.positive_reward = positive_reward                                  # reward for arriving at the answer (sparse, probably 1)
         self.negative_reward = negative_reward                                  # reward for not arriving at the answer
@@ -51,6 +51,7 @@ class EpisodeNLQ(object):
         self.end_entities = end_entities
         self.current_entities = np.array(start_entities)                        # make a copy of start entities (non-addressable)
         self.question_embeddings = np.repeat(question_embeddings, self.num_rollouts, axis=0)     # repeat question embeddings for each rollout (batch_size*num_rollouts, hidden dim), repeats the element after itself
+        self.question_tokens = q_tokens                                         # store the question tokens
 
         # extract the next possible actions
         next_actions = self.grapher.return_next_raw_actions(self.current_entities)

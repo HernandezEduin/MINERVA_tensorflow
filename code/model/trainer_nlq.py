@@ -8,11 +8,10 @@ import logging
 import numpy as np
 import tensorflow as tf
 from typing import Dict, Any, List, Tuple, Optional, Union
-tf.compat.v1.disable_eager_execution()
 
 from code.model.agent_nlq import AgentNLQ
 from code.model.environment_nlq import EnvNLQ
-from code.options import read_options
+from code.options import read_options_nlq
 from code.data.utils import set_seeds
 import codecs
 from collections import defaultdict
@@ -64,13 +63,6 @@ class TrainerNLQ(object):
         # transfer parameters to self
         for key, val in params.items(): setattr(self, key, val)
 
-        # Agent and Environment
-        self.agent = AgentNLQ(
-            params, 
-            entity_vocab=entity_vocab, 
-            relation_vocab=relation_vocab
-        )
-
         self.environment = EnvNLQ(
             params, 
             entity_vocab=entity_vocab, 
@@ -78,6 +70,16 @@ class TrainerNLQ(object):
             mode='train'
         ) # shared environment accross modes, save space with graph builder and textual embeddings
         
+        # Disable Eager Execution for the rest of the code
+        tf.compat.v1.disable_eager_execution()
+
+        # Agent and Environment
+        self.agent = AgentNLQ(
+            params, 
+            entity_vocab=entity_vocab, 
+            relation_vocab=relation_vocab
+        )
+
         self.save_path = None
 
         # Provide the vocab2id and id2vocab mappings
@@ -180,7 +182,8 @@ class TrainerNLQ(object):
 
         # Tensorflow Placeholders
         # New: external question embedding (e.g., BERT). Dim can be anything; we let dense learn to use it.
-        self.question_embedding = tf.compat.v1.placeholder(tf.float32, [None, None], name="question_embedding") # [B*num_rollouts, token_embedding_dim]
+        # TODO: Find a better way to pass the token embedding size
+        self.question_embedding = tf.compat.v1.placeholder(tf.float32, [None, 768], name="question_embedding") # [B*num_rollouts, token_embedding_dim]
         
         self.first_state_of_test = tf.compat.v1.placeholder(tf.bool, name="is_first_state_of_test")             # TODO: Remove this if unused
         self.range_arr = tf.compat.v1.placeholder(tf.int32, shape=[None, ])                                     # Range array for indexing operations.
@@ -233,6 +236,11 @@ class TrainerNLQ(object):
         # TODO: Check if shape is correct for prev_shape
         self.prev_state = tf.compat.v1.placeholder(tf.float32, self.agent.get_mem_shape(), name="memory_of_agent")  # LSTM Memory Shape (num lstm layers, 2, batch size, memory size)
         self.prev_relation = tf.compat.v1.placeholder(tf.int32, [None, ], name="previous_relation")
+        
+        # Format the state properly for MultiRNNCell
+        layer_state = tf.unstack(self.prev_state, self.LSTM_layers)
+        formated_state = [tf.unstack(s, 2) for s in layer_state]
+        
         self.next_relations = tf.compat.v1.placeholder(tf.int32, shape=[None, self.max_num_actions])
         self.next_entities = tf.compat.v1.placeholder(tf.int32, shape=[None, self.max_num_actions])
         self.current_entities = tf.compat.v1.placeholder(tf.int32, shape=[None,])
@@ -242,7 +250,7 @@ class TrainerNLQ(object):
             self.test_loss, test_state, self.test_logits, self.test_action_idx, self.chosen_relation = self.agent.step(
                 self.next_relations, 
                 self.next_entities, 
-                tf.unstack(self.prev_state, self.LSTM_layers),  # TODO: verify this is the correct method instead of formated state [tf.unstack(s, 2) for s in layer_state]
+                formated_state,  # Use properly formatted state
                 self.prev_relation, 
                 self.question_embedding,                        # TODO: verify if we don't need to initialize a new tf question embedding for testing
                 self.current_entities, 
@@ -542,8 +550,12 @@ class TrainerNLQ(object):
         self.environment.change_mode(mode)
         self.environment.change_test_rollouts(self.test_rollouts)   # modifying the number of rollouts for evaluation
         total_examples = self.environment.total_no_examples         # total number of questions
-        for episode in tqdm(self.environment.get_episodes()):
+        test_batch_counter = 0
+        logger.info(f"Testing with mode: {mode} on {total_examples} samples...")
+        for episode in tqdm(self.environment.get_episodes(), desc="Evaluating"):
             temp_batch_size = episode.no_examples                   # batch size, can vary in test due to the last batch
+            test_batch_counter += temp_batch_size
+            logger.info(f"Evaluating samples {test_batch_counter}/{total_examples} with {self.test_rollouts} rollouts...")
 
             # Set Initial Beams Probs
             beam_probs = np.zeros((temp_batch_size * self.test_rollouts, 1)) # Cumulative scores from previous steps [batch_size*k, 1]
@@ -827,7 +839,7 @@ class TrainerNLQ(object):
 if __name__ == '__main__':##
 
     # read command line options
-    options = read_options()
+    options = read_options_nlq()
 
     # Set logging
     logger.setLevel(logging.INFO)
