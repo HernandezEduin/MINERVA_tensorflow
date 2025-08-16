@@ -58,3 +58,5 @@ if __name__ == "__main__":
 
         if counter >= max_questions:
             break
+
+    batcher.embedding_server.close()
