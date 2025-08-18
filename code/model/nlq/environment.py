@@ -8,7 +8,7 @@ navigate from query entities to answer entities.
 
 Key components:
 - Episode management with support for multiple rollouts per question
-- Integration with question batching and embedding generation
+- Integration with question batching and embedding generation  
 - State management for multi-step reasoning paths
 - Reward computation based on reaching correct answer entities
 - Mode switching between training and evaluation
@@ -19,7 +19,7 @@ training. It integrates with the knowledge graph structure and question processi
 pipeline to provide a complete framework for NLQ reasoning.
 
 Classes:
-    EpisodeNLQ: Manages a single reasoning episode with state tracking
+    EpisodeNLQ: Manages a single reasoning episode with explicit data parameters
     EnvNLQ: Main environment class coordinating episodes and data flow
 """
 
@@ -36,7 +36,7 @@ from code.data.embedding_server import EmbeddingServer
 from code.data.feed_nlq_data import QuestionBatcher
 from code.data.grapher import RelationEntityGrapher
 
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import Any, Dict, Generator, List, Optional
 
 logger = logging.getLogger()
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
@@ -74,7 +74,7 @@ class EpisodeNLQ(object):
         
     Example:
         >>> episode = EpisodeNLQ(
-        ...     grapher, data_batch, 
+        ...     grapher, question_tokens, question_embeddings, start_entities, end_entities,
         ...     batch_size=128, path_len=3, num_rollouts=20, test_rollouts=100,
         ...     positive_reward=1.0, negative_reward=-1.0, mode='train'
         ... )
@@ -86,7 +86,10 @@ class EpisodeNLQ(object):
     def __init__(
         self, 
         graph: RelationEntityGrapher, 
-        data: Tuple[List[str], np.ndarray, np.ndarray, np.ndarray], 
+        question_tokens: List[str],
+        question_embeddings: np.ndarray,
+        start_entities: np.ndarray,
+        end_entities: np.ndarray,
         batch_size: int,
         path_len: int,
         num_rollouts: int,
@@ -105,11 +108,10 @@ class EpisodeNLQ(object):
         
         Args:
             graph: Knowledge graph navigator providing action spaces and transitions
-            data: Batch data tuple containing:
-                - question_tokens: List of question token ints
-                - question_embeddings: Question embeddings [batch_size, embedding_dim]
-                - start_entities: Starting entity IDs [batch_size]
-                - end_entities: Target answer entity IDs [batch_size]
+            question_tokens: List of question token ints
+            question_embeddings: Question embeddings [batch_size, embedding_dim]
+            start_entities: Starting entity IDs [batch_size]
+            end_entities: Target answer entity IDs [batch_size]
             batch_size: Number of questions in batch
             path_len: Maximum reasoning steps allowed
             num_rollouts: Number of training rollouts per question
@@ -133,7 +135,6 @@ class EpisodeNLQ(object):
             self.num_rollouts = test_rollouts
 
         self.current_hop = 0
-        q_tokens, question_embeddings, start_entities, end_entities = data
         self.no_examples = start_entities.shape[0]
         self.positive_reward = positive_reward
         self.negative_reward = negative_reward
@@ -146,7 +147,7 @@ class EpisodeNLQ(object):
         self.end_entities = end_entities
         self.current_entities = np.array(start_entities)
         self.question_embeddings = np.repeat(question_embeddings, self.num_rollouts, axis=0) # [batch_size * num_rollouts, embedding_dim]
-        self.question_tokens = q_tokens
+        self.question_tokens = question_tokens
 
         # Initialize state with available actions from starting positions
         next_actions = self.grapher.return_next_raw_actions(self.current_entities)
@@ -394,10 +395,13 @@ class EnvNLQ(object):
         """
         if self.mode == 'train':
             for data in self.batcher.yield_next_batch_train():
-
+                question_tokens, question_embeddings, start_entities, end_entities = data
                 yield EpisodeNLQ(
                     self.grapher, 
-                    data, 
+                    question_tokens,
+                    question_embeddings,
+                    start_entities,
+                    end_entities,
                     batch_size=self.batch_size,
                     path_len=self.path_len,
                     num_rollouts=self.num_rollouts,
@@ -410,9 +414,13 @@ class EnvNLQ(object):
             for data in self.batcher.yield_next_batch_test():
                 if data == None:
                     return
+                question_tokens, question_embeddings, start_entities, end_entities = data
                 yield EpisodeNLQ(
                     self.grapher, 
-                    data, 
+                    question_tokens,
+                    question_embeddings,
+                    start_entities,
+                    end_entities,
                     batch_size=self.batch_size,
                     path_len=self.path_len,
                     num_rollouts=self.num_rollouts,
