@@ -564,6 +564,7 @@ class TrainerNLQ(object):
         self.batch_counter = 0
         self.environment.change_mode('train')                           # Change environment mode to training
         for episode in self.environment.get_episodes():                 # Provide the current episode, can be repeated
+            assert episode.mode == 'train', "Environment mode must be 'train' for training episodes"
 
             self.batch_counter += 1                                     # Increment batch count by 1 to eventually break the loop
             h = sess.partial_run_setup(fetches=fetches, feeds=feeds)    # Set up graph from fetches and feeds
@@ -637,6 +638,8 @@ class TrainerNLQ(object):
 
                 self.test(sess, beam=True, print_paths=False, mode='dev')
 
+                # Important: Change back to training mode to change the data
+                self.environment.change_mode('train')
 
             logger.info('Memory usage: %s (kb)' % resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
 
@@ -708,6 +711,8 @@ class TrainerNLQ(object):
         test_batch_counter = 0
         logger.info(f"Testing with mode: {mode} on {total_examples} samples...")
         for episode in tqdm(self.environment.get_episodes(), desc="Evaluating"):
+            assert episode.mode != 'train', "Environment is in training mode!"
+
             temp_batch_size = episode.no_examples                   # batch size, can vary in test due to the last batch
             test_batch_counter += temp_batch_size
             logger.info(f"Evaluating samples {test_batch_counter}/{total_examples} with {self.test_rollouts} rollouts...")
