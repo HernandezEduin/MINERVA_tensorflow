@@ -30,7 +30,6 @@ import os
 import logging
 
 import numpy as np
-import tensorflow as tf
 
 from code.data.embedding_server import EmbeddingServer
 from code.data.feed_nlq_data import QuestionBatcher
@@ -113,27 +112,30 @@ class EpisodeNLQ:
             - Initializes state with available actions from starting positions
             - Supports different rollout counts for training vs evaluation
         """
-        self.grapher = graph  # environment graph containing the neighborhood of the current position + possible action
-        self.batch_size, self.path_len, num_rollouts, test_rollouts, positive_reward, negative_reward, mode = params # parameters for episode
-        self.mode = mode                                                        # evaluation mode
+        self.grapher = graph
+        self.batch_size, self.path_len, num_rollouts, test_rollouts, positive_reward, negative_reward, mode = params
+        self.mode = mode
         if self.mode == 'train':
-            self.num_rollouts = num_rollouts                                    # number of rollouts (simultaneous paths taken) during training
+            self.num_rollouts = num_rollouts
         else:
-            self.num_rollouts = test_rollouts                                   # number of rollouts (simultaneous paths taken) during testing
-        self.current_hop = 0                                                    # number of hops taken
-        q_tokens, question_embeddings, start_entities, end_entities = data      # question_tokens, question_embeddings, starting node, answer node
-        self.no_examples = start_entities.shape[0]                              # number of examples in the batch
-        self.positive_reward = positive_reward                                  # reward for arriving at the answer (sparse, probably 1)
-        self.negative_reward = negative_reward                                  # reward for not arriving at the answer
-        start_entities = np.repeat(start_entities, self.num_rollouts)           # repeat start entities for each rollout (batch_size*num_rollouts,), repeats the element after itself
-        end_entities = np.repeat(end_entities, self.num_rollouts)               # repeat end entities for each rollout (batch_size*num_rollouts,), repeats the element after itself
+            self.num_rollouts = test_rollouts
+
+        self.current_hop = 0
+        q_tokens, question_embeddings, start_entities, end_entities = data
+        self.no_examples = start_entities.shape[0]
+        self.positive_reward = positive_reward
+        self.negative_reward = negative_reward
+
+        # Repeat entities/embeddings for multiple rollouts per question [batch_size,] -> [batch_size * num_rollouts]
+        start_entities = np.repeat(start_entities, self.num_rollouts)
+        end_entities = np.repeat(end_entities, self.num_rollouts)
         self.start_entities = start_entities
         self.end_entities = end_entities
-        self.current_entities = np.array(start_entities)                        # make a copy of start entities (non-addressable)
-        self.question_embeddings = np.repeat(question_embeddings, self.num_rollouts, axis=0)     # repeat question embeddings for each rollout (batch_size*num_rollouts, hidden dim), repeats the element after itself
-        self.question_tokens = q_tokens                                         # store the question tokens
+        self.current_entities = np.array(start_entities)
+        self.question_embeddings = np.repeat(question_embeddings, self.num_rollouts, axis=0) # [batch_size * num_rollouts, embedding_dim]
+        self.question_tokens = q_tokens
 
-        # extract the next possible actions
+        # Initialize state with available actions from starting positions
         next_actions = self.grapher.return_next_raw_actions(self.current_entities)
 
         self.state = {}                                                         # RL states (next_relations, next_entities, current_entities)
@@ -205,13 +207,9 @@ class EpisodeNLQ:
             - Negative rewards discourage incorrect reasoning directions
             - Reward values are configured during environment initialization
         """
-        reward = (self.current_entities == self.end_entities)       # if the current position matches the answer entities
-
-        # set the True and False values to the values of positive and negative rewards.
-        condlist = [reward == True, reward == False]                # condition list for rewards
-        choicelist = [self.positive_reward, self.negative_reward]   # choice list for rewards
-
-        # [B*num_rollouts,] assigns the reward accordingly to whichever statement is true
+        reward = (self.current_entities == self.end_entities)
+        condlist = [reward == True, reward == False]
+        choicelist = [self.positive_reward, self.negative_reward]
         reward = np.select(condlist, choicelist)
         return reward
 
@@ -239,13 +237,11 @@ class EpisodeNLQ:
             - Dynamically computes new action spaces using the grapher (no masking)
             - State is automatically updated for the next reasoning step
         """
-        self.current_hop += 1   # increment the current step
-        self.current_entities = self.state['next_entities'][np.arange(self.no_examples*self.num_rollouts), action] # for each sample, take the action to get new location
+        self.current_hop += 1
+        self.current_entities = self.state['next_entities'][np.arange(self.no_examples*self.num_rollouts), action]
 
-        # extract the next possible actions
+        # Update state with new actions from new positions
         next_actions = self.grapher.return_next_raw_actions(self.current_entities)
-
-        # store the new states
         self.state['next_relations'] = next_actions[:, :, 1]
         self.state['next_entities'] = next_actions[:, :, 0]
         self.state['current_entities'] = self.current_entities
@@ -308,14 +304,14 @@ class EnvNLQ(object):
             - Stores vocabularies for entity/relation ID conversion
             - Embedding server enables dynamic question encoding
         """
-        self.batch_size = params['batch_size']               # batch size
-        self.num_rollouts = params['num_rollouts']           # number of rollouts (simultaneous paths taken)
-        self.positive_reward = params['positive_reward']     # positive reward value
-        self.negative_reward = params['negative_reward']     # negative reward value
-        self.mode = mode                                     # mode (train/dev/test)
-        self.path_len = params['path_length']                # max number of steps agent is allowed to take
-        self.test_rollouts = params['test_rollouts']         # number of rollouts (simultaneous paths taken) during testing
-        input_dir = params['data_input_dir']                 # input directory for data
+        self.batch_size = params['batch_size']
+        self.num_rollouts = params['num_rollouts']
+        self.positive_reward = params['positive_reward']
+        self.negative_reward = params['negative_reward']
+        self.mode = mode
+        self.path_len = params['path_length']
+        self.test_rollouts = params['test_rollouts']
+        input_dir = params['data_input_dir']
 
         # TODO: Improve this so it is shared, might be too heavy having multiple instances
         self.batcher = QuestionBatcher(
@@ -329,7 +325,7 @@ class EnvNLQ(object):
             embedding_server=embedding_server,
         )
 
-        self.total_no_examples = self.batcher.get_question_num()    # total number of examples in the dataset
+        self.total_no_examples = self.batcher.get_question_num()
 
         # Initialize the knowledge graph
         self.grapher = RelationEntityGrapher(triple_store=os.path.join(input_dir, 'graph.txt'),
@@ -392,7 +388,7 @@ class EnvNLQ(object):
         assert mode in ['train', 'dev', 'test'], f"Error! Invalid mode: {mode}"
         self.mode = mode
         self.batcher.set_mode(mode)
-        self.total_no_examples = self.batcher.get_question_num()  # update the total number of examples in the dataset
+        self.total_no_examples = self.batcher.get_question_num()
     
     def change_test_rollouts(self, test_rollouts: int) -> None:
         """
