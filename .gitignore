@@ -4,3 +4,4 @@
 /datasets/*
 /output/*
 .cache/*
+/saved_models/*
