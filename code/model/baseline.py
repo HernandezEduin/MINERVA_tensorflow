@@ -4,9 +4,6 @@ import tensorflow as tf
 from typing import Union, Optional
 from abc import ABC, abstractmethod
 
-# tf.compat.v1.disable_eager_execution()
-
-
 class baseline(ABC):
     """
     Abstract base class for baseline value estimation in reinforcement learning.
