@@ -1,31 +1,89 @@
+"""
+Natural Language Question (NLQ) environment for knowledge graph reasoning.
+
+This module provides the reinforcement learning environment for MINERVA's natural
+language question answering over knowledge graphs. It manages the interaction between
+RL agents and knowledge graphs, handling multi-hop reasoning episodes where agents
+navigate from query entities to answer entities.
+
+Key components:
+- Episode management with support for multiple rollouts per question
+- Integration with question batching and embedding generation
+- State management for multi-step reasoning paths
+- Reward computation based on reaching correct answer entities
+- Mode switching between training and evaluation
+
+The environment supports batch processing and multiple simultaneous exploration
+paths (rollouts) per question to improve sample efficiency and exploration during
+training. It integrates with the knowledge graph structure and question processing
+pipeline to provide a complete framework for NLQ reasoning.
+
+Classes:
+    EpisodeNLQ: Manages a single reasoning episode with state tracking
+    EnvNLQ: Main environment class coordinating episodes and data flow
+"""
+
 from __future__ import absolute_import
 from __future__ import division
 
 import os
+import logging
 
 import numpy as np
 import tensorflow as tf
 
+from code.data.embedding_server import EmbeddingServer
 from code.data.feed_nlq_data import QuestionBatcher
 from code.data.grapher import RelationEntityGrapher
-from code.data.embedding_server import EmbeddingServer
-import logging
 
-from typing import Dict, Any, Tuple, Generator
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 logger = logging.getLogger()
 
-class EpisodeNLQ(object):
+class EpisodeNLQ:
     """
-    Class representing a single episode of interaction with the environment.
+    Single episode manager for natural language question reasoning.
+    
+    Manages the state and dynamics of a single multi-hop reasoning episode where
+    an RL agent navigates through a knowledge graph to answer a natural language
+    question. Supports multiple simultaneous rollouts per question to improve
+    sample efficiency and exploration.
+    
+    The episode tracks the agent's current position, available actions, and provides
+    rewards based on whether the agent reaches the correct answer entity. State
+    includes current entities, possible next actions (relations and target entities),
+    and question context.
+    
+    Attributes:
+        grapher (RelationEntityGrapher): Knowledge graph navigator
+        batch_size (int): Number of questions in the batch
+        path_len (int): Maximum number of reasoning steps allowed
+        num_rollouts (int): Number of simultaneous paths per question
+        mode (str): Current mode ('train', 'dev', or 'test')
+        current_hop (int): Current step number in the reasoning path
+        no_examples (int): Number of unique questions in the batch
+        positive_reward (float): Reward for reaching correct answer
+        negative_reward (float): Reward for incorrect or no answer
+        start_entities (np.ndarray): Starting entity IDs for each rollout
+        end_entities (np.ndarray): Target answer entity IDs for each rollout
+        current_entities (np.ndarray): Current agent positions
+        question_embeddings (np.ndarray): Question embeddings for each rollout
+        question_tokens (List[str]): Original question text tokens
+        state (Dict[str, np.ndarray]): Current environment state
+        
+    Example:
+        >>> episode = EpisodeNLQ(grapher, data_batch, episode_params)
+        >>> state = episode.get_state()
+        >>> new_state = episode(action_indices)
+        >>> rewards = episode.get_reward()
     """
 
     def __init__(
-            self, 
-            graph: RelationEntityGrapher, 
-            data: Tuple[list, np.ndarray, np.ndarray, np.ndarray], 
-            params: Dict[str, Any]
-        ):
+        self, 
+        graph: RelationEntityGrapher, 
+        data: Tuple[List[str], np.ndarray, np.ndarray, np.ndarray], 
+        params: Tuple[int, int, int, int, float, float, str]
+    ) -> None:
         """
         Initialize a reinforcement learning episode for knowledge graph reasoning.
         
@@ -33,6 +91,27 @@ class EpisodeNLQ(object):
         where the agent learns to navigate from start entities to target entities
         by following relation edges. Supports batch processing with multiple rollouts
         for improved training efficiency.
+        
+        Args:
+            graph: Knowledge graph navigator providing action spaces and transitions
+            data: Batch data tuple containing:
+                - question_tokens: List of question token ints
+                - question_embeddings: Question embeddings [batch_size, embedding_dim]
+                - start_entities: Starting entity IDs [batch_size]
+                - end_entities: Target answer entity IDs [batch_size]
+            params: Episode configuration tuple containing:
+                - batch_size: Number of questions in batch
+                - path_len: Maximum reasoning steps allowed
+                - num_rollouts: Number of training rollouts per question
+                - test_rollouts: Number of evaluation rollouts per question
+                - positive_reward: Reward for correct answers
+                - negative_reward: Reward for incorrect answers
+                - mode: Current mode ('train', 'dev', or 'test')
+                
+        Note:
+            - Creates multiple rollouts by repeating each question/entity
+            - Initializes state with available actions from starting positions
+            - Supports different rollout counts for training vs evaluation
         """
         self.grapher = graph  # environment graph containing the neighborhood of the current position + possible action
         self.batch_size, self.path_len, num_rollouts, test_rollouts, positive_reward, negative_reward, mode = params # parameters for episode
@@ -64,16 +143,67 @@ class EpisodeNLQ(object):
 
     def get_state(self) -> Dict[str, np.ndarray]:
         """
-        Return the current state of the environment.
+        Get the current state of the reinforcement learning environment.
+        
+        Returns all necessary information for the agent to make informed decisions
+        during knowledge graph reasoning. The state includes current entity positions
+        and available next actions (entities and relations). Question embeddings are
+        provided separately as they remain constant throughout the episode.
+        
+        Returns:
+            Dictionary containing exactly three keys:
+                - 'current_entities': Current entity positions [total_rollouts]
+                - 'next_entities': Available next entities [total_rollouts, max_actions]
+                - 'next_relations': Available relations [total_rollouts, max_actions]  
+                
+        Note:
+            - State is updated after each environment step
+            - Action spaces are dynamically computed based on current positions
+            - No history tracking - only current position and immediate options
+            - Used by agents to select optimal reasoning actions
         """
         return self.state
 
-    def get_question_embedding(self) -> tf.Tensor:
+    def get_question_embedding(self) -> np.ndarray:
+        """
+        Get the question embeddings for the current episode batch.
+        
+        Returns the pre-computed embeddings for all questions in the current
+        episode batch. These embeddings encode the natural language questions
+        into dense vector representations that guide the reasoning process.
+        The embeddings remain constant throughout the episode as the questions
+        do not change during reasoning.
+        
+        Returns:
+            Question embeddings array [batch_size * num_rollouts, embedding_dim]
+            where each question is repeated for multiple rollouts to enable
+            diverse exploration paths during training
+            
+        Note:
+            - Embeddings are generated once during episode initialization
+            - Same question embedding is shared across all rollouts
+            - Used by agents to condition their reasoning decisions
+        """
         return self.question_embeddings
 
     def get_reward(self) -> np.ndarray:
         """
-        Return the reward signal for the current state.
+        Calculate reward signal for the current state of all batches and rollouts.
+        
+        Computes binary rewards based on whether agents have reached their
+        target entities. Used to train the reinforcement learning policy
+        to navigate toward correct answers in the knowledge graph.
+        
+        Returns:
+            Reward array [batch_size*total_rollouts] containing:
+                - positive_reward: For agents at target entities
+                - negative_reward: For agents not at target entities
+                
+        Note:
+            - Rewards are computed by comparing current positions to target entities
+            - Positive rewards encourage successful reasoning paths
+            - Negative rewards discourage incorrect reasoning directions
+            - Reward values are configured during environment initialization
         """
         reward = (self.current_entities == self.end_entities)       # if the current position matches the answer entities
 
@@ -81,12 +211,33 @@ class EpisodeNLQ(object):
         condlist = [reward == True, reward == False]                # condition list for rewards
         choicelist = [self.positive_reward, self.negative_reward]   # choice list for rewards
 
-        reward = np.select(condlist, choicelist)  # [B*num_rollouts,] assigns the reward accordingly to whichever statement is true
+        # [B*num_rollouts,] assigns the reward accordingly to whichever statement is true
+        reward = np.select(condlist, choicelist)
         return reward
 
-    def __call__(self, action) -> Dict[str, np.ndarray]:
+    def __call__(self, action: np.ndarray) -> Dict[str, np.ndarray]:
         """
-        Take an action in the environment.
+        Execute an action step in the knowledge graph reasoning environment.
+        
+        Takes the agent's selected actions and transitions all rollouts to new
+        entity positions. Updates the environment state with new current positions
+        and computes the next available actions from those positions.
+        
+        Args:
+            action: Selected action indices [batch_size*total_rollouts] indicating which
+                   next_entity/next_relation pair to follow
+                   
+        Returns:
+            Updated state dictionary containing:
+                - 'current_entities': New current entity positions
+                - 'next_entities': Available next entities from new positions
+                - 'next_relations': Available relations from new positions
+                
+        Note:
+            - Increments the current reasoning step counter
+            - Uses action indices to select from available next_entities
+            - Dynamically computes new action spaces using the grapher (no masking)
+            - State is automatically updated for the next reasoning step
         """
         self.current_hop += 1   # increment the current step
         self.current_entities = self.state['next_entities'][np.arange(self.no_examples*self.num_rollouts), action] # for each sample, take the action to get new location
@@ -103,18 +254,59 @@ class EpisodeNLQ(object):
 
 class EnvNLQ(object):
     """
-    Environment for the RL agent, contains the knowledge graph and batch generator. Calls upon the episode for interaction
+    Natural Language Query (NLQ) environment for reinforcement learning agents.
+    
+    Manages the complete reinforcement learning setup for knowledge graph reasoning
+    with natural language questions. Combines knowledge graph navigation with 
+    question understanding to train agents that can answer complex queries by
+    traversing multi-hop reasoning paths.
+    
+    This environment serves as the main interface between RL agents and the
+    knowledge graph reasoning task, providing batch processing capabilities
+    and episodic interaction patterns suitable for policy gradient training.
+    
+    Attributes:
+        grapher: Knowledge graph navigator for action space management
+        batch_loader: Data generator for question/answer batches
+        mode: Current operation mode ('train', 'dev', or 'test')
+        embedding_server: Service for generating question embeddings
+        
+    Example:
+        >>> env = EnvNLQ(params, entity_vocab, relation_vocab, mode='train')
+        >>> episode = env.get_episodes()
+        >>> state = episode.get_state()
+        >>> new_state = episode(action)
+        >>> reward = episode.get_reward()
     """
     def __init__(
-            self, 
-            params, 
-            entity_vocab: Dict[str, int], 
-            relation_vocab: Dict[str, int], 
-            mode: str = 'train', 
-            embedding_server: EmbeddingServer = None
-        ):
+        self, 
+        params: Any, 
+        entity_vocab: Dict[str, int], 
+        relation_vocab: Dict[str, int], 
+        mode: str = 'train', 
+        embedding_server: Optional[EmbeddingServer] = None
+    ) -> None:
         """
-        Initialize the environment by storing initial parameters, setting up the knowledge graph, and initializing the batch generator.
+        Initialize the NLQ environment with knowledge graph and data processing components.
+        
+        Sets up the complete environment infrastructure including knowledge graph
+        navigation, question batch processing, and embedding generation. Creates
+        the foundation for episodic reinforcement learning interactions.
+        
+        Args:
+            params: Configuration object containing environment parameters like
+                   batch_size, path_length, rollout counts, and reward values
+            entity_vocab: Mapping from entity names to unique integer IDs
+            relation_vocab: Mapping from relation names to unique integer IDs  
+            mode: Operation mode - 'train' for training, 'dev'/'test' for evaluation
+            embedding_server: Optional service for generating question embeddings
+                             from natural language text
+                             
+        Note:
+            - Creates RelationEntityGrapher for knowledge graph navigation
+            - Initializes QuestionBatcher for efficient batch processing
+            - Stores vocabularies for entity/relation ID conversion
+            - Embedding server enables dynamic question encoding
         """
         self.batch_size = params['batch_size']               # batch size
         self.num_rollouts = params['num_rollouts']           # number of rollouts (simultaneous paths taken)
@@ -146,6 +338,26 @@ class EnvNLQ(object):
                                              relation_vocab=relation_vocab)
 
     def get_episodes(self) -> Generator[EpisodeNLQ, None, None]:
+        """
+        Generate episodes for reinforcement learning training or evaluation.
+        
+        Creates a generator that yields EpisodeNLQ instances for each batch
+        of questions. Each episode encapsulates the complete state and interaction
+        interface needed for RL agents to perform knowledge graph reasoning.
+        
+        Yields:
+            EpisodeNLQ instances containing:
+                - Initialized environment state for the batch
+                - Question embeddings and target entities  
+                - Knowledge graph navigation interface
+                - Reward computation capabilities
+                
+        Note:
+            - Training mode yields batches continuously for epoch-based training
+            - Evaluation modes (dev/test) yield finite batches then terminate
+            - Each episode supports multiple rollouts for variance reduction
+            - Episodes are automatically configured with current environment parameters
+        """
         params = self.batch_size, self.path_len, self.num_rollouts, self.test_rollouts, self.positive_reward, self.negative_reward, self.mode
         if self.mode == 'train':
             for data in self.batcher.yield_next_batch_train():
@@ -159,7 +371,23 @@ class EnvNLQ(object):
 
     def change_mode(self, mode: str) -> None:
         """
-        Change the mode of the environment (train/dev/test).
+        Switch the environment between training and evaluation modes.
+        
+        Changes the operational mode of both the environment and its batch
+        generator, affecting data sampling patterns and rollout behavior.
+        Training mode enables continuous batch generation while evaluation
+        modes process finite datasets.
+        
+        Args:
+            mode: Target operation mode - 'train', 'dev', or 'test'
+            
+        Raises:
+            AssertionError: If mode is not one of the valid options
+            
+        Note:
+            - Training mode uses different rollout counts than evaluation
+            - Mode change propagates to the underlying batch generator
+            - Affects episode generation behavior in get_episodes()
         """
         assert mode in ['train', 'dev', 'test'], f"Error! Invalid mode: {mode}"
         self.mode = mode
@@ -168,6 +396,22 @@ class EnvNLQ(object):
     
     def change_test_rollouts(self, test_rollouts: int) -> None:
         """
-        Changes the number of test rollouts.
+        Update the number of rollouts used during evaluation/testing.
+        
+        Modifies the rollout count for evaluation modes (dev/test) to control
+        the amount of exploration during inference. Higher rollout counts
+        improve answer accuracy through increased exploration but require
+        more computational resources.
+        
+        Args:
+            test_rollouts: Number of rollouts to use per question during evaluation.
+                          Typical values range from 1 (fast inference) to 100+
+                          (thorough exploration for maximum accuracy)
+                          
+        Note:
+            - Only affects evaluation modes, training rollouts remain unchanged
+            - Higher values improve accuracy but increase inference time
+            - Used for ablation studies and performance tuning
+            - Takes effect for subsequent episodes generated after this call
         """
         self.test_rollouts = test_rollouts
