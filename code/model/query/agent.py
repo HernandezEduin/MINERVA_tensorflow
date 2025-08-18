@@ -183,6 +183,7 @@ class Agent(object):
                 Shape: [batch_size, embedding_size]
             current_entities (tf.Tensor): Current entity positions.
                 Shape: [batch_size]
+            # TODO: Remove label action and first_step_of_test as both go unused (not supervised learning)
             label_action (tf.Tensor): Ground truth action indices for training.
                 Shape: [batch_size]
             range_arr (tf.Tensor): Range array for indexing operations.

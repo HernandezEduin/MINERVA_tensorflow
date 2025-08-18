@@ -15,8 +15,8 @@ def get_args() -> argparse.Namespace:
     ap.add_argument('--data_dir', type=str, default="./datasets/data_preprocessed/kinshiphinton", help='Root directory for KG triples and metadata (default: ./data/FB15k)')
 
     # QA Dataset
-    ap.add_argument('--raw_QAData_path', type=str, default="./datasets/data_preprocessed/kinshiphinton/kinship_hinton_qa_1hop.csv", help="Path to the raw QA CSV dataset (default: FreebaseQA)")
-    ap.add_argument('--cached_QAMetaData_path', type=str, default="./.cache/itl/kinship_hinton_qa_1hop.json", help="Path to cached tokenized QA metadata JSON file")
+    ap.add_argument('--raw_QAData_path', type=str, default="./datasets/data_preprocessed/kinshiphinton/kinship_hinton_qa_2hop.csv", help="Path to the raw QA CSV dataset (default: FreebaseQA)")
+    ap.add_argument('--cached_QAMetaData_path', type=str, default="./.cache/itl/kinship_hinton_qa_2hop.json", help="Path to cached tokenized QA metadata JSON file")
     ap.add_argument('--force_data_prepro', '-f', action="store_true", help="Force re-processing of QA data, even if cache exists")
 
     'Textual Embedding (LLMs)'

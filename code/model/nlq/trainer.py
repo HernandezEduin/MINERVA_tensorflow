@@ -9,8 +9,8 @@ import numpy as np
 import tensorflow as tf
 from typing import Dict, Any, List, Tuple, Optional, Union
 
-from code.model.agent_nlq import AgentNLQ
-from code.model.environment_nlq import EnvNLQ
+from code.model.nlq.agent import AgentNLQ
+from code.model.nlq.environment import EnvNLQ
 from code.data.embedding_server import EmbeddingServer
 from code.options import read_options_nlq
 from code.data.utils import set_seeds
