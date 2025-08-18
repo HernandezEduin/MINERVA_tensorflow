@@ -147,7 +147,15 @@ class TrainerNLQ(object):
         tf.compat.v1.disable_eager_execution()
 
         self.agent = AgentNLQ(
-            params, 
+            embedding_size=params['embedding_size'],
+            hidden_size=params['hidden_size'],
+            use_entity_embeddings=params['use_entity_embeddings'],
+            train_entity_embeddings=params['train_entity_embeddings'],
+            train_relation_embeddings=params['train_relation_embeddings'],
+            num_rollouts=params['num_rollouts'],
+            test_rollouts=params['test_rollouts'],
+            LSTM_layers=params['LSTM_layers'],
+            batch_size=params['batch_size'],
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab
         )

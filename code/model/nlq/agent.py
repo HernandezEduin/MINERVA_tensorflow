@@ -56,7 +56,12 @@ class AgentNLQ(object):
         question_proj: Neural network for question embedding projection
         
     Example:
-        >>> agent = AgentNLQ(params, entity_vocab, relation_vocab)
+        >>> agent = AgentNLQ(
+        ...     embedding_size=100, hidden_size=200, use_entity_embeddings=True,
+        ...     train_entity_embeddings=True, train_relation_embeddings=True,
+        ...     num_rollouts=20, test_rollouts=100, LSTM_layers=3, batch_size=128,
+        ...     entity_vocab=entity_vocab, relation_vocab=relation_vocab
+        ... )
         >>> losses, logits, actions = agent(
         ...     candidate_relations, candidate_entities, 
         ...     current_entities, question_emb, range_arr, T=3
@@ -65,7 +70,15 @@ class AgentNLQ(object):
 
     def __init__(
         self,
-        params: Dict[str, Any],
+        embedding_size: int,
+        hidden_size: int,
+        use_entity_embeddings: bool,
+        train_entity_embeddings: bool,
+        train_relation_embeddings: bool,
+        num_rollouts: int,
+        test_rollouts: int,
+        LSTM_layers: int,
+        batch_size: int,
         entity_vocab: Dict[str, int],
         relation_vocab: Dict[str, int]
     ) -> None:
@@ -78,16 +91,15 @@ class AgentNLQ(object):
         reasoning episodes.
         
         Args:
-            params: Configuration dictionary containing:
-                - embedding_size (int): Dimension of entity/relation embeddings
-                - hidden_size (int): LSTM hidden state dimension  
-                - use_entity_embeddings (bool): Whether to include entity embeddings
-                - train_entity_embeddings (bool): Whether entity embeddings are trainable
-                - train_relation_embeddings (bool): Whether relation embeddings are trainable
-                - num_rollouts (int): Parallel rollouts per question during training
-                - test_rollouts (int): Parallel rollouts per question during evaluation
-                - LSTM_layers (int): Number of LSTM layers in policy network
-                - batch_size (int): Training batch size per question
+            embedding_size: Dimension of entity/relation embeddings
+            hidden_size: LSTM hidden state dimension  
+            use_entity_embeddings: Whether to include entity embeddings
+            train_entity_embeddings: Whether entity embeddings are trainable
+            train_relation_embeddings: Whether relation embeddings are trainable
+            num_rollouts: Parallel rollouts per question during training
+            test_rollouts: Parallel rollouts per question during evaluation
+            LSTM_layers: Number of LSTM layers in policy network
+            batch_size: Training batch size per question
             entity_vocab: Entity name to integer ID mapping for embedding lookup
             relation_vocab: Relation name to integer ID mapping for embedding lookup
             
@@ -100,26 +112,26 @@ class AgentNLQ(object):
 
         self.action_vocab_size = len(relation_vocab)                        # number of possible actions
         self.entity_vocab_size = len(entity_vocab)                          # number of possible entities
-        self.embedding_size = params['embedding_size']                      # dimension size of entity/relation embeddings (NOTE: this will be doubled) [m*D]
-        self.hidden_size = params['hidden_size']                            # dimension size of LSTM hidden state
+        self.embedding_size = embedding_size                                # dimension size of entity/relation embeddings (NOTE: this will be doubled) [m*D]
+        self.hidden_size = hidden_size                                      # dimension size of LSTM hidden state
         self.ePAD = tf.constant(entity_vocab['PAD'], dtype=tf.int32)        # entity padding token
         self.rPAD = tf.constant(relation_vocab['PAD'], dtype=tf.int32)      # relation padding token
-        if params['use_entity_embeddings']:                                 # whether to use entity embeddings
+        if use_entity_embeddings:                                           # whether to use entity embeddings
             self.entity_initializer = tf.keras.initializers.GlorotUniform()
         else:
             self.entity_initializer = tf.zeros_initializer()
-        self.train_entities = params['train_entity_embeddings']             # whether entity embeddings are trainable
-        self.train_relations = params['train_relation_embeddings']          # whether relation embeddings are trainable
+        self.train_entities = train_entity_embeddings                      # whether entity embeddings are trainable
+        self.train_relations = train_relation_embeddings                   # whether relation embeddings are trainable
 
-        self.num_rollouts = params['num_rollouts']                          # number of simultaneous paths to take per question during 'training'
-        self.test_rollouts = params['test_rollouts']                        # number of simulataneous paths to take per question during 'evaluation'
-        self.LSTM_Layers = params['LSTM_layers']                            # number of layers in LSTM
-        self.batch_size = params['batch_size'] * params['num_rollouts']     # effective batch size during training, also accounting the rollouts per questions
+        self.num_rollouts = num_rollouts                                    # number of simultaneous paths to take per question during 'training'
+        self.test_rollouts = test_rollouts                                  # number of simulataneous paths to take per question during 'evaluation'
+        self.LSTM_Layers = LSTM_layers                                      # number of layers in LSTM
+        self.batch_size = batch_size * num_rollouts                        # effective batch size during training, also accounting the rollouts per questions
         self.dummy_start_label = tf.constant(                               # dummy relation for step 0 NOTE: Might be self loop action
             np.ones(self.batch_size, dtype='int64') * relation_vocab['DUMMY_START_RELATION'])
 
         self.entity_embedding_size = self.embedding_size
-        self.use_entity_embeddings = params['use_entity_embeddings']
+        self.use_entity_embeddings = use_entity_embeddings
         self.m = 4 if self.use_entity_embeddings else 2                     # multiplicative factor of the embedding sizes, necessary for later models [B, m*D]
 
         # NOTE: The lookup tables are very similar to the embeddings of KGE models, but without the pretraining and scoring functions for embedding optimizations
