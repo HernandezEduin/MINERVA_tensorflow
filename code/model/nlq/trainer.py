@@ -135,7 +135,17 @@ class TrainerNLQ(object):
 
         # shared environment accross modes, save space with graph builder and textual embeddings
         self.environment = EnvNLQ(
-            params, 
+            batch_size=params['batch_size'],
+            num_rollouts=params['num_rollouts'],
+            positive_reward=params['positive_reward'],
+            negative_reward=params['negative_reward'],
+            path_length=params['path_length'],
+            test_rollouts=params['test_rollouts'],
+            data_input_dir=params['data_input_dir'],
+            question_tokenizer_name=params['question_tokenizer_name'],
+            cached_QAMetaData_path=params['cached_QAMetaData_path'],
+            raw_QAData_path=params['raw_QAData_path'],
+            max_num_actions=params['max_num_actions'],
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab, 
             mode='train',
@@ -626,6 +636,7 @@ class TrainerNLQ(object):
                 self.path_logger_file_ = os.path.join(self.path_logger_file, str(self.batch_counter), "paths")
 
                 self.test(sess, beam=True, print_paths=False, mode='dev')
+
 
             logger.info('Memory usage: %s (kb)' % resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
 

@@ -27,6 +27,7 @@ from __future__ import absolute_import
 from __future__ import division
 
 import os
+import sys
 import logging
 
 import numpy as np
@@ -38,8 +39,9 @@ from code.data.grapher import RelationEntityGrapher
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 logger = logging.getLogger()
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
-class EpisodeNLQ:
+class EpisodeNLQ(object):
     """
     Single episode manager for natural language question reasoning.
     
@@ -71,7 +73,11 @@ class EpisodeNLQ:
         state (Dict[str, np.ndarray]): Current environment state
         
     Example:
-        >>> episode = EpisodeNLQ(grapher, data_batch, episode_params)
+        >>> episode = EpisodeNLQ(
+        ...     grapher, data_batch, 
+        ...     batch_size=128, path_len=3, num_rollouts=20, test_rollouts=100,
+        ...     positive_reward=1.0, negative_reward=-1.0, mode='train'
+        ... )
         >>> state = episode.get_state()
         >>> new_state = episode(action_indices)
         >>> rewards = episode.get_reward()
@@ -81,7 +87,13 @@ class EpisodeNLQ:
         self, 
         graph: RelationEntityGrapher, 
         data: Tuple[List[str], np.ndarray, np.ndarray, np.ndarray], 
-        params: Tuple[int, int, int, int, float, float, str]
+        batch_size: int,
+        path_len: int,
+        num_rollouts: int,
+        test_rollouts: int,
+        positive_reward: float,
+        negative_reward: float,
+        mode: str
     ) -> None:
         """
         Initialize a reinforcement learning episode for knowledge graph reasoning.
@@ -98,14 +110,13 @@ class EpisodeNLQ:
                 - question_embeddings: Question embeddings [batch_size, embedding_dim]
                 - start_entities: Starting entity IDs [batch_size]
                 - end_entities: Target answer entity IDs [batch_size]
-            params: Episode configuration tuple containing:
-                - batch_size: Number of questions in batch
-                - path_len: Maximum reasoning steps allowed
-                - num_rollouts: Number of training rollouts per question
-                - test_rollouts: Number of evaluation rollouts per question
-                - positive_reward: Reward for correct answers
-                - negative_reward: Reward for incorrect answers
-                - mode: Current mode ('train', 'dev', or 'test')
+            batch_size: Number of questions in batch
+            path_len: Maximum reasoning steps allowed
+            num_rollouts: Number of training rollouts per question
+            test_rollouts: Number of evaluation rollouts per question
+            positive_reward: Reward for correct answers
+            negative_reward: Reward for incorrect answers
+            mode: Current mode ('train', 'dev', or 'test')
                 
         Note:
             - Creates multiple rollouts by repeating each question/entity
@@ -113,7 +124,8 @@ class EpisodeNLQ:
             - Supports different rollout counts for training vs evaluation
         """
         self.grapher = graph
-        self.batch_size, self.path_len, num_rollouts, test_rollouts, positive_reward, negative_reward, mode = params
+        self.batch_size = batch_size
+        self.path_len = path_len
         self.mode = mode
         if self.mode == 'train':
             self.num_rollouts = num_rollouts
@@ -124,6 +136,7 @@ class EpisodeNLQ:
         q_tokens, question_embeddings, start_entities, end_entities = data
         self.no_examples = start_entities.shape[0]
         self.positive_reward = positive_reward
+        self.negative_reward = negative_reward
         self.negative_reward = negative_reward
 
         # Repeat entities/embeddings for multiple rollouts per question [batch_size,] -> [batch_size * num_rollouts]
@@ -268,7 +281,13 @@ class EnvNLQ(object):
         embedding_server: Service for generating question embeddings
         
     Example:
-        >>> env = EnvNLQ(params, entity_vocab, relation_vocab, mode='train')
+        >>> env = EnvNLQ(
+        ...     batch_size=128, num_rollouts=20, positive_reward=1.0, negative_reward=-1.0,
+        ...     path_length=3, test_rollouts=100, data_input_dir="./data", 
+        ...     question_tokenizer_name="bert-base", cached_QAMetaData_path="./cache",
+        ...     raw_QAData_path="./raw", max_num_actions=200,
+        ...     entity_vocab=entity_vocab, relation_vocab=relation_vocab, mode='train'
+        ... )
         >>> episode = env.get_episodes()
         >>> state = episode.get_state()
         >>> new_state = episode(action)
@@ -276,7 +295,17 @@ class EnvNLQ(object):
     """
     def __init__(
         self, 
-        params: Any, 
+        batch_size: int,
+        num_rollouts: int,
+        positive_reward: float,
+        negative_reward: float,
+        path_length: int,
+        test_rollouts: int,
+        data_input_dir: str,
+        question_tokenizer_name: str,
+        cached_QAMetaData_path: str,
+        raw_QAData_path: str,
+        max_num_actions: int,
         entity_vocab: Dict[str, int], 
         relation_vocab: Dict[str, int], 
         mode: str = 'train', 
@@ -290,8 +319,17 @@ class EnvNLQ(object):
         the foundation for episodic reinforcement learning interactions.
         
         Args:
-            params: Configuration object containing environment parameters like
-                   batch_size, path_length, rollout counts, and reward values
+            batch_size: Number of questions per training batch
+            num_rollouts: Number of training rollouts per question
+            positive_reward: Reward value for reaching correct answer entities
+            negative_reward: Reward value for incorrect or no answer
+            path_length: Maximum number of reasoning steps allowed per episode
+            test_rollouts: Number of evaluation rollouts per question
+            data_input_dir: Directory containing knowledge graph and question data
+            question_tokenizer_name: Name/path of tokenizer for question processing
+            cached_QAMetaData_path: Path to cached question-answer metadata
+            raw_QAData_path: Path to raw question-answer data files
+            max_num_actions: Maximum number of actions/relations per entity
             entity_vocab: Mapping from entity names to unique integer IDs
             relation_vocab: Mapping from relation names to unique integer IDs  
             mode: Operation mode - 'train' for training, 'dev'/'test' for evaluation
@@ -304,22 +342,22 @@ class EnvNLQ(object):
             - Stores vocabularies for entity/relation ID conversion
             - Embedding server enables dynamic question encoding
         """
-        self.batch_size = params['batch_size']
-        self.num_rollouts = params['num_rollouts']
-        self.positive_reward = params['positive_reward']
-        self.negative_reward = params['negative_reward']
+        self.batch_size = batch_size
+        self.num_rollouts = num_rollouts
+        self.positive_reward = positive_reward
+        self.negative_reward = negative_reward
         self.mode = mode
-        self.path_len = params['path_length']
-        self.test_rollouts = params['test_rollouts']
-        input_dir = params['data_input_dir']
+        self.path_len = path_length
+        self.test_rollouts = test_rollouts
+        input_dir = data_input_dir
 
         # TODO: Improve this so it is shared, might be too heavy having multiple instances
         self.batcher = QuestionBatcher(
             input_dir=input_dir,
             batch_size=self.batch_size,
-            question_tokenizer_name=params['question_tokenizer_name'],
-            cached_QAMetaData_path=params['cached_QAMetaData_path'],
-            raw_QAData_path=params['raw_QAData_path'],
+            question_tokenizer_name=question_tokenizer_name,
+            cached_QAMetaData_path=cached_QAMetaData_path,
+            raw_QAData_path=raw_QAData_path,
             force_data_prepro=False,
             mode=self.mode,
             embedding_server=embedding_server,
@@ -329,7 +367,7 @@ class EnvNLQ(object):
 
         # Initialize the knowledge graph
         self.grapher = RelationEntityGrapher(triple_store=os.path.join(input_dir, 'graph.txt'),
-                                             max_num_actions=params['max_num_actions'],
+                                             max_num_actions=max_num_actions,
                                              entity_vocab=entity_vocab,
                                              relation_vocab=relation_vocab)
 
@@ -354,16 +392,35 @@ class EnvNLQ(object):
             - Each episode supports multiple rollouts for variance reduction
             - Episodes are automatically configured with current environment parameters
         """
-        params = self.batch_size, self.path_len, self.num_rollouts, self.test_rollouts, self.positive_reward, self.negative_reward, self.mode
         if self.mode == 'train':
             for data in self.batcher.yield_next_batch_train():
 
-                yield EpisodeNLQ(self.grapher, data, params)
+                yield EpisodeNLQ(
+                    self.grapher, 
+                    data, 
+                    batch_size=self.batch_size,
+                    path_len=self.path_len,
+                    num_rollouts=self.num_rollouts,
+                    test_rollouts=self.test_rollouts,
+                    positive_reward=self.positive_reward,
+                    negative_reward=self.negative_reward,
+                    mode=self.mode
+                )
         else:
             for data in self.batcher.yield_next_batch_test():
                 if data == None:
                     return
-                yield EpisodeNLQ(self.grapher, data, params)
+                yield EpisodeNLQ(
+                    self.grapher, 
+                    data, 
+                    batch_size=self.batch_size,
+                    path_len=self.path_len,
+                    num_rollouts=self.num_rollouts,
+                    test_rollouts=self.test_rollouts,
+                    positive_reward=self.positive_reward,
+                    negative_reward=self.negative_reward,
+                    mode=self.mode
+                )
 
     def change_mode(self, mode: str) -> None:
         """
