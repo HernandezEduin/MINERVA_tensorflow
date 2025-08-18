@@ -13,7 +13,7 @@ from code.model.nlq.agent import AgentNLQ
 from code.model.nlq.environment import EnvNLQ
 from code.data.embedding_server import EmbeddingServer
 from code.options import read_options_nlq
-from code.data.utils import set_seeds
+from code.data.setup import set_seeds
 import codecs
 from collections import defaultdict
 import gc

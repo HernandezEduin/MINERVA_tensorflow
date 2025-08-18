@@ -15,46 +15,12 @@ import pandas as pd
 import tensorflow as tf
 from transformers import PreTrainedTokenizer, AutoTokenizer
 
-from collections import namedtuple
-from dataclasses import dataclass
+from code.data.itl_typing import DFSplit
+from code.data.setup import get_git_root
+
 from typing import Dict, Optional, List, Tuple, Union, Optional
 
 # TODO: Separate the functions and classes of this file into a more appropriate file
-
-Triple = Tuple[int, int, int]
-Triples = List[Triple]
-# Named Tuple for DF SPlit
-SplitTuple = namedtuple("SplitTuple", ["train", "dev", "test"])
-
-@dataclass
-class DFSplit:
-    train: pd.DataFrame
-    dev: pd.DataFrame
-    test: pd.DataFrame
-
-def set_seeds(seed):
-    import numpy as np
-    import random
-    import tensorflow as tf
-
-    random.seed(seed)
-    np.random.seed(seed)
-    tf.random.set_seed(seed)
-
-def get_git_root() -> Optional[str]:
-    # NOTE: This will break if we remove the .git folder (could very well happen).
-    # IN that case:
-    # TODO: simply return the path until the `MultiHopKG` folder is found. 
-
-    try:
-        # Run the git command to get the top-level directory of the repository
-        result = subprocess.run(['git', 'rev-parse', '--show-toplevel'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-        # The output will be the path to the root of the repository
-        git_root = result.stdout.strip()
-        return git_root
-    except subprocess.CalledProcessError:
-        # Handle the case where the command fails (e.g., not in a git repository)
-        return None
 
 def load_json(file_path: str) -> Dict[str, any]:
     with open(file_path, 'r') as file:

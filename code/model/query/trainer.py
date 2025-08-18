@@ -10,17 +10,17 @@ import tensorflow as tf
 from typing import Dict, Any, List, Tuple, Optional, Union
 tf.compat.v1.disable_eager_execution()
 
-from code.model.agent import Agent
+from code.model.query.agent import Agent
 from code.options import read_options
-from code.model.environment import env
-from code.data.utils import set_seeds
+from code.model.query.environment import env
+from code.data.data_utils import set_seeds
 import codecs
 from collections import defaultdict
 import gc
 import resource
 import sys
 from code.model.baseline import ReactiveBaseline
-from code.model.nell_eval import nell_eval
+from code.model.query.nell_eval import nell_eval
 from scipy.special import logsumexp as lse
 
 logger = logging.getLogger()
