@@ -2,7 +2,7 @@
 
 data_input_dir="datasets/data_preprocessed/kinshiphinton/"
 vocab_dir="datasets/data_preprocessed/kinshiphinton/vocab"
-total_iterations=200
+total_iterations=50
 eval_every=10
 path_length=2
 hidden_size=50
