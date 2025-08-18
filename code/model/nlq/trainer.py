@@ -633,8 +633,8 @@ class TrainerNLQ(object):
                 with open(os.path.join(self.output_dir, 'scores.txt'), 'a') as score_file:
                     score_file.write("Score for iteration " + str(self.batch_counter) + "\n")
                 
-                os.makedirs(os.path.join(self.path_logger_file, str(self.batch_counter)), exist_ok=True)
-                self.path_logger_file_ = os.path.join(self.path_logger_file, str(self.batch_counter), "paths")
+                # os.makedirs(os.path.join(self.path_logger_file, str(self.batch_counter)), exist_ok=True)
+                # self.path_logger_file_ = os.path.join(self.path_logger_file, str(self.batch_counter), "paths")
 
                 self.test(sess, beam=True, print_paths=False, mode='dev')
 
