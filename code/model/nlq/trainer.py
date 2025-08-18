@@ -18,7 +18,6 @@ Key components:
 Classes:
     TrainerNLQ: Main trainer class for MINERVA NLQ reasoning
 """
-# TODO: Organize the imports
 # TODO: Remove params and instead use variables to not obsfuscate the code
 # TODO: Add more training arguments
 # TODO: Add WANDB Code
@@ -27,28 +26,30 @@ Classes:
 
 from __future__ import absolute_import
 from __future__ import division
-from tqdm import tqdm
-import json
-import time
-import os
-import logging
-import numpy as np
-import tensorflow as tf
-from typing import Dict, Any, List, Tuple, Optional, Union
 
-from code.model.nlq.agent import AgentNLQ
-from code.model.nlq.environment import EnvNLQ
-from code.data.embedding_server import EmbeddingServer
-from code.options import read_options_nlq
-from code.data.setup import set_seeds
 import codecs
-from collections import defaultdict
 import gc
+import json
+import logging
+import os
 import resource
 import sys
-from code.model.baseline import ReactiveBaseline
-from scipy.special import logsumexp as lse
+import time
 from collections import defaultdict
+
+import numpy as np
+import tensorflow as tf
+from scipy.special import logsumexp as lse
+from tqdm import tqdm
+
+from code.data.embedding_server import EmbeddingServer
+from code.model.baseline import ReactiveBaseline
+from code.model.nlq.agent import AgentNLQ
+from code.model.nlq.environment import EnvNLQ
+from code.data.setup import set_seeds
+from code.options import read_options_nlq
+
+from typing import Dict, Any, List, Tuple, Optional, Union
 
 logger = logging.getLogger()
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
