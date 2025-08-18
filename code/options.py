@@ -81,50 +81,63 @@ def read_options():
 
 def read_options_nlq():
     parser = argparse.ArgumentParser()
+    
+    # Dataset and Data Processing
     parser.add_argument("--data_input_dir", default="", type=str)
     parser.add_argument("--input_file", default="train.txt", type=str)
     parser.add_argument("--create_vocab", default=0, type=int)
     parser.add_argument("--vocab_dir", default="", type=str)
     parser.add_argument("--max_num_actions", default=200, type=int)
-    parser.add_argument("--path_length", default=3, type=int)
-    parser.add_argument("--hidden_size", default=50, type=int)
-    parser.add_argument("--embedding_size", default=50, type=int)
-    parser.add_argument("--batch_size", default=128, type=int)
-    parser.add_argument("--grad_clip_norm", default=5, type=int)
-    parser.add_argument("--l2_reg_const", default=1e-2, type=float)
-    parser.add_argument("--learning_rate", default=1e-3, type=float)
-    parser.add_argument("--beta", default=1e-2, type=float)
-    parser.add_argument("--positive_reward", default=1.0, type=float)
-    parser.add_argument("--negative_reward", default=0, type=float)
-    parser.add_argument("--gamma", default=1, type=float)
-    parser.add_argument("--log_dir", default="./logs/", type=str)
-    parser.add_argument("--log_file_name", default="reward.txt", type=str)
-    parser.add_argument("--output_file", default="", type=str)
-    parser.add_argument("--num_rollouts", default=20, type=int)
-    parser.add_argument("--test_rollouts", default=100, type=int)
-    parser.add_argument("--LSTM_layers", default=1, type=int)
-    parser.add_argument("--model_dir", default='', type=str)
-    parser.add_argument("--base_output_dir", default='', type=str)
-    parser.add_argument("--total_iterations", default=2000, type=int)
-
-    parser.add_argument("--Lambda", default=0.0, type=float)
-    parser.add_argument("--pool", default="max", type=str)
-    parser.add_argument("--eval_every", default=100, type=int)
-    parser.add_argument("--use_entity_embeddings", default=0, type=int)
-    parser.add_argument("--train_entity_embeddings", default=0, type=int)
-    parser.add_argument("--train_relation_embeddings", default=1, type=int)
-    parser.add_argument("--model_load_dir", default="", type=str)
-    parser.add_argument("--load_model", default=0, type=int)
-
+    
     # QA Dataset
     parser.add_argument('--raw_QAData_path', type=str, default="./datasets/data_preprocessed/kinshiphinton/kinship_hinton_qa_1hop.csv", help="Path to the raw QA CSV dataset (default: FreebaseQA)")
     parser.add_argument('--cached_QAMetaData_path', type=str, default="./.cache/itl/kinship_hinton_qa_1hop.json", help="Path to cached tokenized QA metadata JSON file")
     parser.add_argument('--force_data_prepro', '-f', action="store_true", help="Force re-processing of QA data, even if cache exists")
-
+    
     # Textual Embedding (LLMs)
     parser.add_argument("--question_tokenizer_name", type=str, default="bert-base-uncased", help="Tokenizer name for question embeddings")
-
-    # Seed
+    
+    # LSTM/Neural Network Architecture
+    parser.add_argument("--hidden_size", default=50, type=int)
+    parser.add_argument("--embedding_size", default=50, type=int)
+    parser.add_argument("--LSTM_layers", default=1, type=int)
+    parser.add_argument("--pool", default="max", type=str)
+    
+    # Embedding Configuration
+    parser.add_argument("--use_entity_embeddings", default=0, type=int)
+    parser.add_argument("--train_entity_embeddings", default=0, type=int)
+    parser.add_argument("--train_relation_embeddings", default=1, type=int)
+    
+    # Reinforcement Learning
+    parser.add_argument("--path_length", default=3, type=int)
+    parser.add_argument("--num_rollouts", default=20, type=int)
+    parser.add_argument("--test_rollouts", default=100, type=int)
+    parser.add_argument("--positive_reward", default=1.0, type=float)
+    parser.add_argument("--negative_reward", default=0, type=float)
+    parser.add_argument("--gamma", default=1, type=float)
+    
+    # Training Configuration
+    parser.add_argument("--batch_size", default=128, type=int)
+    parser.add_argument("--learning_rate", default=1e-3, type=float)
+    parser.add_argument("--grad_clip_norm", default=5, type=int)
+    parser.add_argument("--l2_reg_const", default=1e-2, type=float)
+    parser.add_argument("--beta", default=1e-2, type=float)
+    parser.add_argument("--Lambda", default=0.0, type=float)
+    parser.add_argument("--total_iterations", default=2000, type=int)
+    parser.add_argument("--eval_every", default=100, type=int)
+    
+    # Model Loading and Saving
+    parser.add_argument("--model_dir", default='', type=str)
+    parser.add_argument("--model_load_dir", default="", type=str)
+    parser.add_argument("--load_model", default=0, type=int)
+    parser.add_argument("--base_output_dir", default='', type=str)
+    
+    # Logging and Output
+    parser.add_argument("--log_dir", default="./logs/", type=str)
+    parser.add_argument("--log_file_name", default="reward.txt", type=str)
+    parser.add_argument("--output_file", default="", type=str)
+    
+    # Miscellaneous
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
 
     try:
