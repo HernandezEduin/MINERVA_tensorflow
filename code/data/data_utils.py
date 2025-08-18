@@ -111,6 +111,7 @@ def process_and_cache_triviaqa_data(
     question_tokenizer: PreTrainedTokenizer,
     entity2id: Dict[str, int],
     relation2id: Dict[str, int],
+    seed: Optional[int] = None,
     override_split: bool = True,
     logger: Optional[logging.Logger] = None,
 ) -> Tuple[DFSplit, Dict[str, Any]]:
@@ -135,6 +136,7 @@ def process_and_cache_triviaqa_data(
         question_tokenizer: HuggingFace tokenizer for question text processing
         entity2id: Mapping from entity names to integer IDs
         relation2id: Mapping from relation names to integer IDs
+        seed: Optional seed for random number generation
         override_split: If True, use SplitLabel column for splitting when available
         logger: Optional logger for progress tracking and warnings
         
@@ -221,7 +223,7 @@ def process_and_cache_triviaqa_data(
         data_columns.append(split_label)
         
     new_df = pd.concat(data_columns, axis=1)
-    new_df = new_df.sample(frac=1).reset_index(drop=True)  # Shuffle data
+    new_df = new_df.sample(frac=1, random_state=seed).reset_index(drop=True)  # Shuffle data with fixed seed
 
     # Create train/dev/test splits
     if (override_split and 'SplitLabel' in new_df.columns and 
@@ -233,7 +235,7 @@ def process_and_cache_triviaqa_data(
             logger.info("Using SplitLabel column for data splitting")
     else:
         # Automatic splitting
-        train_df, test_df = train_test_split(new_df, test_size=0.2, random_state=42)
+        train_df, test_df = train_test_split(new_df, test_size=0.2, random_state=seed)
 
     # Handle dev set creation
     if len(test_df) < 100:
@@ -243,7 +245,7 @@ def process_and_cache_triviaqa_data(
             logger.warning("Test set too small (<100 samples), using as dev set")
     else:
         # Split test set into dev and test
-        dev_df, test_df = train_test_split(test_df, test_size=0.5, random_state=42)
+        dev_df, test_df = train_test_split(test_df, test_size=0.5, random_state=seed)
 
     # Validate DataFrame creation
     if not all(isinstance(df, pd.DataFrame) for df in [train_df, dev_df, test_df]):
@@ -281,6 +283,7 @@ def load_qa_data(
     question_tokenizer_name: str,
     entity2id: Dict[str, int],
     relation2id: Dict[str, int], 
+    seed: Optional[int] = None,
     logger: Optional[logging.Logger] = None,
     force_recompute: bool = False,
     override_split: bool = True,
@@ -299,6 +302,7 @@ def load_qa_data(
         question_tokenizer_name: HuggingFace tokenizer identifier
         entity2id: Entity name to integer ID mapping
         relation2id: Relation name to integer ID mapping
+        seed: Optional seed for random number generation
         logger: Optional logger for progress tracking
         force_recompute: If True, ignore cache and reprocess data
         override_split: If True, use SplitLabel column when available
@@ -351,6 +355,7 @@ def load_qa_data(
             question_tokenizer,
             entity2id,
             relation2id,
+            seed=seed,
             override_split=override_split,
             logger=logger,
         )

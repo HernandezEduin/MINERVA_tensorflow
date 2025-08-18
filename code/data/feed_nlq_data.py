@@ -48,6 +48,7 @@ class QuestionBatcher:
         cached_QAMetaData_path: str,
         raw_QAData_path: str,
         mode: str = "train",
+        seed: Optional[int] = None,
         force_data_prepro: bool = False,
         embedding_server: Optional[EmbeddingServer] = None,
     ) -> None:
@@ -61,6 +62,7 @@ class QuestionBatcher:
             cached_QAMetaData_path: Path to cached preprocessed QA metadata JSON
             raw_QAData_path: Path to raw QA dataset CSV file
             mode: Initial mode ('train', 'dev', or 'test')
+            seed: Optional seed for random number generation
             force_data_prepro: Whether to force reprocessing of cached data
             embedding_server: Optional pre-initialized embedding server
         """
@@ -87,6 +89,7 @@ class QuestionBatcher:
             question_tokenizer_name=question_tokenizer_name,
             entity2id=ent2id,
             relation2id=rel2id,
+            seed=seed,
             logger=None,
             force_recompute=force_data_prepro,
         )

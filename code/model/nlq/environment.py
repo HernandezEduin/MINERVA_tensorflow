@@ -310,6 +310,7 @@ class EnvNLQ(object):
         entity_vocab: Dict[str, int], 
         relation_vocab: Dict[str, int], 
         mode: str = 'train', 
+        seed: Optional[int] = None,
         embedding_server: Optional[EmbeddingServer] = None
     ) -> None:
         """
@@ -334,6 +335,7 @@ class EnvNLQ(object):
             entity_vocab: Mapping from entity names to unique integer IDs
             relation_vocab: Mapping from relation names to unique integer IDs  
             mode: Operation mode - 'train' for training, 'dev'/'test' for evaluation
+            seed: Optional seed for random number generation
             embedding_server: Optional service for generating question embeddings
                              from natural language text
                              
@@ -361,6 +363,7 @@ class EnvNLQ(object):
             raw_QAData_path=raw_QAData_path,
             force_data_prepro=False,
             mode=self.mode,
+            seed=seed,
             embedding_server=embedding_server,
         )
 

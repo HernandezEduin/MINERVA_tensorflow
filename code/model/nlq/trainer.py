@@ -20,9 +20,11 @@ Classes:
 """
 # TODO: Remove params and instead use variables to not obsfuscate the code
 # TODO: Add more training arguments
+# TODO: Organize the training arguments
 # TODO: Add WANDB Code
 # TODO: Remove input_paths
 # TODO: Remove first_state_of_test
+# TODO: Inspect best saving for checkpoints
 
 from __future__ import absolute_import
 from __future__ import division
@@ -149,6 +151,7 @@ class TrainerNLQ(object):
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab, 
             mode='train',
+            seed=params['seed'],
             embedding_server=embedding_server
         )
         
@@ -1024,11 +1027,12 @@ if __name__ == '__main__':
     logger.info('Total number of entities {}'.format(len(entity_vocab)))
     logger.info('Total number of relations {}'.format(len(relation_vocab)))
 
-    # Configure TensorFlow
+    # Configure TensorFlow for deterministic behavior
     save_path = ''
     config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = False
     config.log_device_placement = False
+    config.allow_soft_placement = True
 
     # Set seed for reproducibility
     set_seeds(options['seed'])
@@ -1044,6 +1048,8 @@ if __name__ == '__main__':
             embedding_server=embedding_server
         )
         with tf.compat.v1.Session(config=config) as sess:
+            # Set seeds again after session creation to ensure TF operations are deterministic
+            set_seeds(options['seed'])
             sess.run(trainer.initialize())
             trainer.initialize_pretrained_embeddings(sess=sess)
 
@@ -1071,6 +1077,8 @@ if __name__ == '__main__':
     )
     
     with tf.compat.v1.Session(config=config) as sess:
+        # Set seeds again after session creation to ensure TF operations are deterministic  
+        set_seeds(options['seed'])
         trainer.initialize(restore=save_path, sess=sess) # check if it is fine to initialize an already trained model or if we need to create one before this line
 
         trainer.test_rollouts = 100                      # set test rollouts to 100 for evaluation

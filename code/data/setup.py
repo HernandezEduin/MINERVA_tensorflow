@@ -21,7 +21,8 @@ def set_seeds(seed: Union[int, None]) -> None:
         
     Note:
         This function imports the required libraries locally to avoid
-        unnecessary dependencies if not needed.
+        unnecessary dependencies if not needed. Also configures TensorFlow
+        for deterministic operations and handles transformers library if available.
     """
     if seed is None:
         return
@@ -29,10 +30,25 @@ def set_seeds(seed: Union[int, None]) -> None:
     import numpy as np
     import random
     import tensorflow as tf
+    import os
 
+    # Set seeds for all random number generators
     random.seed(seed)
     np.random.seed(seed)
     tf.random.set_seed(seed)
+    
+    # Set environment variables for deterministic behavior
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ['TF_DETERMINISTIC_OPS'] = '1'
+    os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
+
+    # Set seed for transformers library if available
+    try:
+        import transformers
+        transformers.set_seed(seed)
+    except ImportError:
+        # transformers not available, skip
+        pass
 
 def get_git_root() -> Optional[str]:
     """
