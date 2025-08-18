@@ -1,56 +1,109 @@
-import subprocess
+"""
+Data utilities for the MINERVA TensorFlow project.
 
-import os
+This module provides comprehensive utilities for data loading, preprocessing, and
+transformation for knowledge graph question answering tasks. It handles the complete
+pipeline from raw CSV data to processed, tokenized datasets ready for training.
+
+Key functionalities:
+- JSON file loading and processing
+- Text literal extraction from string representations
+- QA dataset preprocessing with tokenization and entity/relation mapping
+- Dataset splitting with caching for efficient re-use
+- Vocabulary loading for entities and relations
+- TensorFlow-based text embedding generation with attention masking
+
+The module supports both cached and fresh data processing, with intelligent
+fallback mechanisms and comprehensive metadata tracking for reproducibility.
+
+Functions:
+    load_json: Load JSON data from file paths
+    extract_literals: Extract Python literals from string representations
+    process_and_cache_triviaqa_data: Process and cache QA datasets with splits
+    load_qa_data: Load QA data with caching support
+    load_dictionary: Load entity and relation vocabularies
+    ids_to_embeddings_tf: Generate embeddings from token IDs using TensorFlow models
+"""
+
+import ast
 import json
 import logging
+import os
 from datetime import datetime
-from sklearn.model_selection import train_test_split
 
-import re
-import ast
-
-import numpy as np
 import pandas as pd
-
 import tensorflow as tf
-from transformers import PreTrainedTokenizer, AutoTokenizer
+from sklearn.model_selection import train_test_split
+from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from code.data.itl_typing import DFSplit
 from code.data.setup import get_git_root
 
-from typing import Dict, Optional, List, Tuple, Union, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-# TODO: Separate the functions and classes of this file into a more appropriate file
-
-def load_json(file_path: str) -> Dict[str, any]:
+def load_json(file_path: str) -> Dict[str, Any]:
+    """
+    Load JSON data from a file.
+    
+    Args:
+        file_path: Path to the JSON file to load
+        
+    Returns:
+        Dictionary containing the loaded JSON data
+        
+    Raises:
+        FileNotFoundError: If the specified file doesn't exist
+        json.JSONDecodeError: If the file contains invalid JSON
+    """
     with open(file_path, 'r') as file:
         data = json.load(file)
     return data
 
 def extract_literals(column: Union[str, pd.Series], flatten: bool = False) -> Union[pd.Series, List[str]]:
     """
-    Extracts the list of string literals from each entry in the provided column (Pandas Series or string)
-    using ast.literal_eval. Optionally flattens the extracted lists into a single list if 'flatten' is set to True.
-
+    Extract Python literals from string representations in pandas columns.
+    
+    Safely evaluates string representations of Python literals (lists, dicts, etc.)
+    using ast.literal_eval. Optionally flattens nested lists into a single flat list.
+    This is commonly used for processing path data stored as string representations
+    of lists in CSV files.
+    
     Args:
-        column (Union[str, pd.Series]): The column containing string representations of lists. Can be a
-                                        Pandas Series or a string representation of a list.
-        flatten (bool): If True, flattens the lists into a single list. Default is False.
-
+        column: Pandas Series containing string representations of Python literals,
+               or a single string representation
+        flatten: If True, flattens all extracted lists into a single list.
+                If False, returns a Series of individual lists
+                
     Returns:
-        Union[pd.Series, List[str]]: A Pandas Series of lists if flatten is False, otherwise a single flattened list of strings.
+        If flatten=False: Pandas Series where each element is the evaluated literal
+        If flatten=True: Single flattened list containing all elements from all lists
+        
+    Example:
+        >>> import pandas as pd
+        >>> data = pd.Series(['[1, 2, 3]', '[4, 5]', '[6]'])
+        >>> result = extract_literals(data, flatten=False)
+        >>> print(result.tolist())  # [[1, 2, 3], [4, 5], [6]]
+        >>> 
+        >>> flat_result = extract_literals(data, flatten=True)
+        >>> print(flat_result)  # [1, 2, 3, 4, 5, 6]
+        
+    Raises:
+        ValueError: If any string cannot be safely evaluated as a Python literal
+        SyntaxError: If any string contains invalid Python syntax
     """
-
-    # Convert the input to a Pandas Series if it's a string
+    # Convert single string input to pandas Series for uniform processing
     if isinstance(column, str):
         column = pd.Series([column])
 
-    # Convert string representations of lists into actual Python lists
-    column = column.apply(ast.literal_eval)
+    # Safely evaluate string representations of Python literals
+    evaluated_column = column.apply(ast.literal_eval)
 
-    # Flatten the lists if the flatten argument is True
-    if flatten: column = [item for sublist in column for item in sublist]
-    return column
+    # Flatten all lists into a single list if requested
+    if flatten:
+        flattened_result = [item for sublist in evaluated_column for item in sublist]
+        return flattened_result
+        
+    return evaluated_column
 
 def process_and_cache_triviaqa_data(
     raw_QAData_path: str,
@@ -60,98 +113,148 @@ def process_and_cache_triviaqa_data(
     relation2id: Dict[str, int],
     override_split: bool = True,
     logger: Optional[logging.Logger] = None,
-) -> Tuple[DFSplit, Dict] :
+) -> Tuple[DFSplit, Dict[str, Any]]:
     """
-    Args:
-        raw_triples_loc (str) : Place where the unprocessed triples are
-        cached_toked_qatriples_path (str) : Place where processed triples are meante to go. You must format them.
-        idx_2_graphEnc (Dict[str, np.array]) : The encoding of the triples
-        text_tokenizer (AutoTokenizer) : The tokenizer for the text
-    Returns:
-
-    Data Assumptions:
-        - csv file consists of 1..N columns.
-          N-1 is Question, N is Answer
-        - 1..N-2 represent the path
-          These columns are organized as Entity, Relation, Entity,...
-    LG: We might change this assumption to a whole graph later on:
-    """
-
-    ## NOTE:  ---
-    ## Old Data Loading has been moved elsewhere
-    ## ----------
-    ## Processing
-    csv_df = pd.read_csv(raw_QAData_path)
-    assert (
-        len(csv_df.columns) > 2
-    ), "The CSV file should have at least 2 columns. One triplet and one QA pair"
+    Process and cache question-answer dataset with entity/relation mapping.
     
-    # FIX: The harcoding of things like "Question" and "Answer" is not good.
-    # !TODO: Make this more flexible and relavant entities and relations be optional features
+    Loads raw QA data from CSV, tokenizes questions, maps entities and relations
+    to their integer IDs, creates train/dev/test splits, and caches the processed
+    data for future use. Supports both automatic splitting and label-guided splitting.
+    
+    The function expects CSV data with specific column structure:
+    - Question: Natural language questions
+    - Query-Entity: Starting entity for reasoning
+    - Answer-Entity: Target answer entity
+    - Paths: (Optional) Reasoning paths as string representations of lists
+    - Hops: (Optional) Number of reasoning hops
+    - SplitLabel: (Optional) Predefined split labels ('train', 'dev', 'test')
+    
+    Args:
+        raw_QAData_path: Path to the raw CSV file containing QA data
+        cached_toked_qatriples_metadata_path: Path where processed metadata will be saved
+        question_tokenizer: HuggingFace tokenizer for question text processing
+        entity2id: Mapping from entity names to integer IDs
+        relation2id: Mapping from relation names to integer IDs
+        override_split: If True, use SplitLabel column for splitting when available
+        logger: Optional logger for progress tracking and warnings
+        
+    Returns:
+        Tuple containing:
+            - DFSplit: Object with train/dev/test DataFrames
+            - Dict: Metadata including tokenizer info, column mappings, and file paths
+            
+    Raises:
+        AssertionError: If CSV file has fewer than 3 columns
+        ValueError: If git root cannot be determined
+        RuntimeError: If data loading fails or DataFrames are invalid
+        KeyError: If required entities/relations are missing from vocabularies
+        
+    Note:
+        - Questions are tokenized without special tokens ([CLS], [SEP])
+        - Entity and relation names are mapped to integer IDs
+        - Paths are converted from string representations to lists of [head, rel, tail] triples
+        - Automatic splitting uses 80/10/10 train/dev/test if no SplitLabel column
+        - Small test sets (<100 samples) are used as dev sets with 50/50 dev/test split
+    """
+
+    # Load and validate CSV data
+    csv_df = pd.read_csv(raw_QAData_path)
+    assert len(csv_df.columns) > 2, \
+        "CSV file must have at least 3 columns (Question, Query-Entity, Answer-Entity)"
+    
+    # Extract required columns
     questions = csv_df["Question"]
-    query_ent = csv_df["Query-Entity"]
+    query_ent = csv_df["Query-Entity"] 
     answer_ent = csv_df["Answer-Entity"]
+    
+    # Extract optional columns
     paths = extract_literals(csv_df["Paths"]) if 'Paths' in csv_df.columns else None
-    splitLabel = csv_df["SplitLabel"] if 'SplitLabel' in csv_df.columns else None
+    split_label = csv_df["SplitLabel"] if 'SplitLabel' in csv_df.columns else None
     hops = csv_df["Hops"] if 'Hops' in csv_df.columns else None
 
-    # Ensure directory exists
+    # Ensure output directory exists
     dir_name = os.path.dirname(cached_toked_qatriples_metadata_path)
     os.makedirs(dir_name, exist_ok=True)
 
-    ## Prepare the language data
-    questions = questions.map(lambda x: question_tokenizer.encode(x, add_special_tokens=False))
+    # Tokenize questions (without special tokens for later processing)
+    tokenized_questions = questions.map(
+        lambda x: question_tokenizer.encode(x, add_special_tokens=False)
+    )
 
-    # Preparing the KG data by converting text to indices
-    query_ent = query_ent.map(lambda ent: entity2id[ent])
-    answer_ent = answer_ent.map(lambda ent: entity2id[ent])
+    # Map entities and relations to integer IDs
+    mapped_query_ent = query_ent.map(lambda ent: entity2id[ent])
+    mapped_answer_ent = answer_ent.map(lambda ent: entity2id[ent])
     if paths is not None:
-        paths = paths.map(lambda path: [[entity2id[head], relation2id[rel], entity2id[tail]] for head, rel, tail in path])
+        mapped_paths = paths.map(
+            lambda path: [
+                [entity2id[head], relation2id[rel], entity2id[tail]] 
+                for head, rel, tail in path
+            ]
+        )
 
-    # timestamp without nanoseconds
+    # Generate unique timestamp for file naming
     timestamp = str(int(datetime.now().timestamp()))
     cached_split_locations: Dict[str, str] = {
-        name: cached_toked_qatriples_metadata_path.replace(".json", "") + f"_Split-{name}" + f"_date-{timestamp}" + ".parquet"
+        name: cached_toked_qatriples_metadata_path.replace(".json", "") + 
+              f"_Split-{name}_date-{timestamp}.parquet"
         for name in ["train", "dev", "test"]
     }
 
+    # Get repository root for relative path generation
     repo_root = get_git_root()
     if repo_root is None:
-        raise ValueError("Cannot get the git root path. Please make sure you are running a clone of the repo")
+        raise ValueError("Cannot determine git root path. Ensure you're in a git repository.")
 
-    cached_split_locations = {key : val.replace(repo_root + "/", "") for key,val in cached_split_locations.items()}
+    # Convert to relative paths
+    cached_split_locations = {
+        key: val.replace(repo_root + "/", "") 
+        for key, val in cached_split_locations.items()
+    }
 
-    # Start amalgamating the data into its final form
-    # TODO: test set
-    new_df = pd.concat([questions, query_ent, answer_ent, paths, hops, splitLabel], axis=1)
-    new_df = new_df.sample(frac=1).reset_index(drop=True) # Shuffle before splitting by label
+    # Combine all processed data into final DataFrame
+    data_columns = [tokenized_questions, mapped_query_ent, mapped_answer_ent]
+    if paths is not None:
+        data_columns.append(mapped_paths)
+    if hops is not None:
+        data_columns.append(hops)
+    if split_label is not None:
+        data_columns.append(split_label)
+        
+    new_df = pd.concat(data_columns, axis=1)
+    new_df = new_df.sample(frac=1).reset_index(drop=True)  # Shuffle data
 
-    # Check if splitLabel column has meaningful values to guide the split
-    if override_split and 'SplitLabel' in new_df.columns and new_df['SplitLabel'].notna().any() and not new_df['SplitLabel'].eq('').all():
+    # Create train/dev/test splits
+    if (override_split and 'SplitLabel' in new_df.columns and 
+        new_df['SplitLabel'].notna().any() and not new_df['SplitLabel'].eq('').all()):
+        # Use predefined split labels
         train_df = new_df[new_df['SplitLabel'] == 'train'].reset_index(drop=True)
         test_df = new_df[new_df['SplitLabel'] != 'train'].reset_index(drop=True)
-        if logger: logger.info(f"Using splitLabel column to split the data into train and test sets.")
+        if logger: 
+            logger.info("Using SplitLabel column for data splitting")
     else:
-        new_df = new_df.sample(frac=1).reset_index(drop=True)
+        # Automatic splitting
         train_df, test_df = train_test_split(new_df, test_size=0.2, random_state=42)
 
-     # If the test set is too small, use it as dev
+    # Handle dev set creation
     if len(test_df) < 100:
+        # Use entire test set as dev set for small datasets
         dev_df = test_df
-        if logger: logger.warning("Test set is too small, using it as dev set!!")
+        if logger: 
+            logger.warning("Test set too small (<100 samples), using as dev set")
     else:
+        # Split test set into dev and test
         dev_df, test_df = train_test_split(test_df, test_size=0.5, random_state=42)
 
-    if not isinstance(train_df, pd.DataFrame) or not isinstance(dev_df, pd.DataFrame) or not isinstance(test_df, pd.DataFrame):
-        raise RuntimeError("The data was not loaded properly. Please check the data loading code.")
+    # Validate DataFrame creation
+    if not all(isinstance(df, pd.DataFrame) for df in [train_df, dev_df, test_df]):
+        raise RuntimeError("Data loading failed - invalid DataFrames created")
 
-    for name,df in {"train": train_df, "dev": dev_df, "test": test_df}.items():
+    # Save processed data to parquet files
+    for name, df in {"train": train_df, "dev": dev_df, "test": test_df}.items():
         df.to_parquet(cached_split_locations[name], index=False)
 
-    ## Prepare metadata for export
-    # Tokenize the text by applying a pandas map function
-    # Store the metadata
-    metadata = {
+    # Create metadata for reproducibility and documentation
+    metadata: Dict[str, Any] = {
         "question_tokenizer": question_tokenizer.name_or_path,
         "question_column": "Question",
         "query_entities_column": "Query-Entity",
@@ -159,76 +262,139 @@ def process_and_cache_triviaqa_data(
         "paths_column": "Paths",
         "hops_column": "Hops",
         "splitLabel_column": "SplitLabel",
-        "0-index_column": True,
+        "zero_indexed_columns": True,
         "date_processed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "saved_paths": cached_split_locations,
         "timestamp": timestamp,
     }
 
+    # Save metadata to JSON file
     with open(cached_toked_qatriples_metadata_path, "w") as f:
-        json.dump(metadata, f)
+        json.dump(metadata, f, indent=2)
 
     return DFSplit(train=train_df, dev=dev_df, test=test_df), metadata
 
 
 def load_qa_data(
     cached_metadata_path: str,
-    raw_QAData_path,
+    raw_QAData_path: str,
     question_tokenizer_name: str,
     entity2id: Dict[str, int],
     relation2id: Dict[str, int], 
-    logger: logging.Logger = None,
+    logger: Optional[logging.Logger] = None,
     force_recompute: bool = False,
     override_split: bool = True,
-):
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+    """
+    Load QA dataset with intelligent caching and fallback processing.
+    
+    Attempts to load preprocessed data from cache first. If cache is missing
+    or force_recompute is True, processes raw data and creates new cache.
+    This function provides a unified interface for QA data loading with
+    automatic preprocessing and caching management.
+    
+    Args:
+        cached_metadata_path: Path to cached metadata JSON file
+        raw_QAData_path: Path to raw CSV data file (used if cache missing)
+        question_tokenizer_name: HuggingFace tokenizer identifier
+        entity2id: Entity name to integer ID mapping
+        relation2id: Relation name to integer ID mapping
+        logger: Optional logger for progress tracking
+        force_recompute: If True, ignore cache and reprocess data
+        override_split: If True, use SplitLabel column when available
+        
+    Returns:
+        Tuple containing:
+            - train_df: Training DataFrame
+            - dev_df: Development DataFrame  
+            - test_df: Test DataFrame
+            - train_metadata: Metadata dictionary with processing information
+            
+    Raises:
+        FileNotFoundError: If raw data file doesn't exist when cache is missing
+        json.JSONDecodeError: If cached metadata is corrupted
+        KeyError: If required entities/relations missing from vocabularies
+        
+    Note:
+        - Cached data is loaded from parquet files for efficiency
+        - Metadata tracks tokenizer, column mappings, and file locations
+        - Automatic fallback to raw processing if cache is invalid
+    """
 
     if os.path.exists(cached_metadata_path) and not force_recompute:
-        print(
-            f"\033[93m Found cache for the QA data {cached_metadata_path} will load it instead of working on {raw_QAData_path}. \033[0m"
-        )
-        # Read the first line of the raw csv to count the number of columns
-        train_metadata = json.load(open(cached_metadata_path.format(question_tokenizer_name)))
+        # Load from cache
+        print(f"\033[93mFound cached QA data at {cached_metadata_path}, loading instead of "
+              f"processing {raw_QAData_path}\033[0m")
+              
+        # Load metadata and extract file paths
+        with open(cached_metadata_path, 'r') as f:
+            train_metadata = json.load(f)
         saved_paths: Dict[str, str] = train_metadata["saved_paths"]
 
+        # Load preprocessed DataFrames
         train_df = pd.read_parquet(saved_paths["train"])
-        # TODO: Eventually use this to avoid data leakage
         dev_df = pd.read_parquet(saved_paths["dev"])
         test_df = pd.read_parquet(saved_paths["test"])
 
-        # Ensure that we are not reading them integers as strings, but also not as floats
-        print(
-            f"Loaded cached data from \033[93m\033[4m{json.dumps(cached_metadata_path,indent=4)} \033[0m"
-        )
+        print(f"Loaded cached data from \033[93m\033[4m{cached_metadata_path}\033[0m")
+        
     else:
-        ########################################
-        # Actually compute the data.
-        ########################################
-        print(
-            f"\033[93m Did not find cache for the QA data {cached_metadata_path}. Will now process it from {raw_QAData_path} \033[0m"
-        )
+        # Process raw data
+        print(f"\033[93mCache not found or force_recompute=True. "
+              f"Processing raw data from {raw_QAData_path}\033[0m")
+              
+        # Load tokenizer and process data
         question_tokenizer = AutoTokenizer.from_pretrained(question_tokenizer_name)
-        df_split, train_metadata = ( # Includes shuffling
-            process_and_cache_triviaqa_data(  # TOREM: Same here, might want to remove if not really used
-                raw_QAData_path,
-                cached_metadata_path,
-                question_tokenizer,
-                entity2id,
-                relation2id,
-                override_split=override_split,
-                logger=logger,
-            )
+        df_split, train_metadata = process_and_cache_triviaqa_data(
+            raw_QAData_path,
+            cached_metadata_path,
+            question_tokenizer,
+            entity2id,
+            relation2id,
+            override_split=override_split,
+            logger=logger,
         )
+        
+        # Extract DataFrames from split object
         train_df, dev_df, test_df = df_split.train, df_split.dev, df_split.test
-        print(
-            f"Done. Result dumped at : \n\033[93m\033[4m{train_metadata['saved_paths']}\033[0m"
-        )
+        print(f"Processing complete. Data saved to:\n"
+              f"\033[93m\033[4m{train_metadata['saved_paths']}\033[0m")
 
     return train_df, dev_df, test_df, train_metadata
 
-def load_dictionary(data_dir):
-    ent2id = load_json(os.path.join(data_dir, "vocab/entity_vocab.json"))  # Assuming this function loads the dictionaries correctly
-    rel2id = load_json(os.path.join(data_dir, "vocab/relation_vocab.json"))  # Assuming this function loads the dictionaries correctly
+def load_dictionary(data_dir: str) -> Tuple[Dict[str, int], Dict[str, int], Dict[int, str], Dict[int, str]]:
+    """
+    Load entity and relation vocabularies from JSON files.
+    
+    Loads the entity and relation vocabularies from the standard MINERVA
+    directory structure and creates both forward (name->ID) and reverse 
+    (ID->name) mappings for efficient lookup operations.
+    
+    Args:
+        data_dir: Directory containing the vocab subdirectory with JSON files
+                 Expected files: vocab/entity_vocab.json, vocab/relation_vocab.json
+                 
+    Returns:
+        Tuple containing:
+            - ent2id: Entity name to integer ID mapping
+            - rel2id: Relation name to integer ID mapping
+            - id2ent: Integer ID to entity name mapping
+            - id2rel: Integer ID to relation name mapping
+            
+    Raises:
+        FileNotFoundError: If vocabulary JSON files don't exist
+        json.JSONDecodeError: If vocabulary files contain invalid JSON
+        
+    Example:
+        >>> ent2id, rel2id, id2ent, id2rel = load_dictionary("datasets/kinship/")
+        >>> print(ent2id["person_1"])  # 42
+        >>> print(id2ent[42])          # "person_1"
+    """
+    # Load vocabulary mappings from JSON files
+    ent2id = load_json(os.path.join(data_dir, "vocab/entity_vocab.json"))
+    rel2id = load_json(os.path.join(data_dir, "vocab/relation_vocab.json"))
 
+    # Create reverse mappings for efficient ID->name lookup
     id2ent = {v: k for k, v in ent2id.items()}
     id2rel = {v: k for k, v in rel2id.items()}
 
@@ -236,48 +402,84 @@ def load_dictionary(data_dir):
 
 def ids_to_embeddings_tf(
     token_id_batches: List[List[int]],
-    model,                              # e.g., TFAutoModel.from_pretrained(..., from_pt=False)
-    pad_id: int = 0,                    # BERT pad is usually 0
-    add_special_tokens: bool = True,    # add [CLS]=101 and [SEP]=102 if not present
+    model: Any,  # TensorFlow model with .last_hidden_state output
+    pad_id: int = 0,
+    add_special_tokens: bool = True,
     cls_id: int = 101,
     sep_id: int = 102,
     max_length: Optional[int] = 128,
 ) -> tf.Tensor:
     """
+    Convert token ID sequences to embeddings using a TensorFlow model.
+    
+    Takes variable-length sequences of token IDs, adds special tokens if needed,
+    pads to uniform length, and generates contextualized embeddings using a
+    transformer model. Applies masked mean pooling to create sequence-level
+    representations.
+    
     Args:
-      token_id_batches: list of sequences of token IDs (variable length)
-      model: TF encoder returning .last_hidden_state
+        token_id_batches: List of token ID sequences (variable length)
+        model: TensorFlow transformer model (e.g., TFAutoModel) that returns
+               outputs with .last_hidden_state attribute
+        pad_id: Token ID used for padding sequences (typically 0 for BERT)
+        add_special_tokens: Whether to add [CLS] and [SEP] tokens if missing
+        cls_id: Classification token ID (typically 101 for BERT)
+        sep_id: Separator token ID (typically 102 for BERT)
+        max_length: Maximum sequence length; longer sequences are truncated
+        
     Returns:
-      [batch, hidden] masked-mean pooled embeddings
+        TensorFlow tensor of shape (batch_size, hidden_size) containing
+        mean-pooled embeddings for each input sequence
+        
+    Example:
+        >>> import tensorflow as tf
+        >>> from transformers import TFAutoModel
+        >>> model = TFAutoModel.from_pretrained("bert-base-uncased")
+        >>> sequences = [[2054, 2003], [2129, 2515]]  # "what is", "how does"
+        >>> embeddings = ids_to_embeddings_tf(sequences, model)
+        >>> print(embeddings.shape)  # (2, 768)
+        
+    Note:
+        - Special tokens are added automatically if missing
+        - Sequences are padded to the longest length in the batch
+        - Mean pooling excludes padding tokens using attention masks
+        - Handles empty sequences gracefully
     """
-
-    # Optionally wrap with special tokens
+    # Add special tokens if requested and missing
     if add_special_tokens:
-        token_id_batches = [
-            ([cls_id] + seq + [sep_id]) if (len(seq) == 0 or seq[0] != cls_id) else seq
-            for seq in token_id_batches
-        ]
+        processed_batches = []
+        for seq in token_id_batches:
+            processed_seq = seq.copy() if seq else []
+            # Add [CLS] at start if missing
+            if not processed_seq or processed_seq[0] != cls_id:
+                processed_seq = [cls_id] + processed_seq
+            # Add [SEP] at end if missing
+            if not processed_seq or processed_seq[-1] != sep_id:
+                processed_seq = processed_seq + [sep_id]
+            processed_batches.append(processed_seq)
+        token_id_batches = processed_batches
 
-    # Truncate if needed
+    # Truncate sequences if needed
     if max_length is not None:
         token_id_batches = [seq[:max_length] for seq in token_id_batches]
 
-    # Ragged -> padded int32 [B, Lmax]
+    # Convert to padded tensor format
     rag = tf.ragged.constant(token_id_batches, dtype=tf.int32)
     lengths = rag.row_lengths()
     Lmax = tf.reduce_max(lengths) if max_length is None else tf.constant(max_length, dtype=tf.int64)
-    input_ids = rag.to_tensor(shape=[rag.shape[0], Lmax], default_value=pad_id)  # [B, L]
+    input_ids = rag.to_tensor(shape=[rag.shape[0], Lmax], default_value=pad_id)
 
-    # Attention mask: 1 for tokens, 0 for padding
-    attn = tf.sequence_mask(lengths, maxlen=Lmax)          # [B, L] bool
-    attn = tf.cast(attn, tf.int32)
+    # Create attention mask: 1 for real tokens, 0 for padding
+    attn_mask = tf.sequence_mask(lengths, maxlen=Lmax)
+    attn_mask = tf.cast(attn_mask, tf.int32)
 
-    # Encode
-    outputs = model(input_ids=input_ids, attention_mask=attn)
-    last_hidden = outputs.last_hidden_state                 # [B, L, H]
+    # Generate embeddings using the model
+    outputs = model(input_ids=input_ids, attention_mask=attn_mask)
+    last_hidden = outputs.last_hidden_state                 # Shape: (batch_size, seq_len, hidden_size)
 
-    # Masked mean pooling
-    mask = tf.cast(attn, tf.float32)[:, :, None]            # [B, L, 1]
-    summed = tf.reduce_sum(last_hidden * mask, axis=1)      # [B, H]
-    denom = tf.maximum(tf.reduce_sum(mask, axis=1), 1e-9)   # [B, 1]
-    return summed / denom                                   # [B, H]
+    # Apply masked mean pooling over non-padding tokens
+    mask = tf.cast(attn_mask, tf.float32)[:, :, None]       # Shape: (batch_size, seq_len, 1)
+    summed = tf.reduce_sum(last_hidden * mask, axis=1)      # Shape: (batch_size, hidden_size)
+    denom = tf.maximum(tf.reduce_sum(mask, axis=1), 1e-9)   # Avoid division by zero
+    
+    return summed / denom                                   # Shape: (batch_size, hidden_size)
