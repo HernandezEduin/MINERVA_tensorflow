@@ -1,3 +1,30 @@
+"""
+MINERVA trainer for natural language question answering over knowledge graphs.
+
+This module implements the complete training and evaluation pipeline for the MINERVA
+reinforcement learning agent. It orchestrates policy gradient training, baseline
+variance reduction, comprehensive evaluation with multiple metrics, and model
+checkpointing for knowledge graph reasoning tasks.
+
+Key components:
+- REINFORCE policy gradient training with baseline variance reduction
+- Multi-environment support for train/dev/test data splits
+- Comprehensive evaluation with Hits@K and MRR metrics
+- Beam search decoding for improved inference performance
+- Model checkpointing and restoration capabilities
+- Memory-efficient episode processing with TensorFlow partial_run
+- Detailed path logging and reasoning trajectory analysis
+
+Classes:
+    TrainerNLQ: Main trainer class for MINERVA NLQ reasoning
+"""
+# TODO: Organize the imports
+# TODO: Remove params and instead use variables to not obsfuscate the code
+# TODO: Add more training arguments
+# TODO: Add WANDB Code
+# TODO: Remove input_paths
+# TODO: Remove first_state_of_test
+
 from __future__ import absolute_import
 from __future__ import division
 from tqdm import tqdm
@@ -30,58 +57,94 @@ class TrainerNLQ(object):
     """
     MINERVA trainer for reinforcement learning-based knowledge graph reasoning.
     
-    This class orchestrates the training and evaluation of the MINERVA agent, which
-    learns to navigate knowledge graphs through multi-hop reasoning. The trainer
-    handles episode generation, reward computation, policy gradient updates, and
-    performance evaluation using various metrics (Hits@K, MRR).
+    Orchestrates the complete training and evaluation pipeline for natural language
+    question answering over knowledge graphs. Implements policy gradient training
+    with REINFORCE algorithm, baseline variance reduction, and comprehensive
+    evaluation using multiple metrics and search strategies.
     
-    Key Components:
-    - Policy gradient training with REINFORCE algorithm
-    - Baseline variance reduction using reactive baseline
-    - Multi-environment support (train/dev/test)
-    - Comprehensive evaluation with beam search
-    - Model checkpointing and restoration
+    The trainer manages:
+    - Policy gradient training with episode generation and reward computation
+    - Baseline variance reduction using reactive baseline for stable training
+    - Multi-environment coordination for train/dev/test data splits
+    - Comprehensive evaluation with Hits@K, MRR, and optional beam search
+    - Model checkpointing based on performance improvements
+    - Memory-efficient processing using TensorFlow partial_run
+    - Detailed logging and path analysis for reasoning interpretability
+    
+    Architecture:
+    - Agent: LSTM-based policy network for action selection
+    - Environment: Knowledge graph navigation with episode management
+    - Baseline: Reactive baseline for variance reduction in policy gradients
+    - Optimizer: Adam optimizer with gradient clipping for stable training
+    
+    Attributes:
+        agent (AgentNLQ): MINERVA agent for knowledge graph reasoning
+        environment (EnvNLQ): Knowledge graph environment for episode generation
+        baseline (ReactiveBaseline): Baseline estimator for variance reduction
+        optimizer: Adam optimizer for policy gradient updates
+        entity_vocab (Dict[str, int]): Entity name to ID vocabulary mapping
+        relation_vocab (Dict[str, int]): Relation name to ID vocabulary mapping
+        save_path (Optional[str]): Path to saved model checkpoint
+        
+    Example:
+        >>> trainer = TrainerNLQ(params, entity_vocab, relation_vocab, embedding_server)
+        >>> trainer.initialize(sess)
+        >>> trainer.train(sess)
+        >>> hits1, hits3, hits5, hits10, hits20 = trainer.test(sess, beam=True)
     """
 
     def __init__(
-            self,
-            params: Dict[str, Any],
-            entity_vocab: Dict[str, int],
-            relation_vocab: Dict[str, int],
-            embedding_server: EmbeddingServer = None
-        ) -> None:
+        self,
+        params: Dict[str, Any],
+        entity_vocab: Dict[str, int],
+        relation_vocab: Dict[str, int],
+        embedding_server: Optional[EmbeddingServer] = None
+    ) -> None:
         """
-        Initialize the MINERVA trainer with configuration parameters.
+        Initialize the MINERVA trainer with all necessary components for training and evaluation.
         
-        Sets up the agent, environments, baseline, optimizer, and all necessary
-        components for training and evaluation.
+        Sets up the complete training pipeline including agent, environment, baseline,
+        optimizer, and all configuration parameters. Establishes vocabulary mappings
+        and prepares the system for policy gradient training on knowledge graph
+        reasoning tasks.
         
         Args:
-            params (Dict[str, Any]): Configuration dictionary containing:
-                - Agent parameters (embedding sizes, LSTM layers, etc.)
-                - Training parameters (learning rate, batch size, etc.) 
-                - Environment parameters (path length, rollouts, etc.)
-                - Evaluation parameters (beam size, metrics, etc.)
-                - Data paths and vocabulary mappings
-            entity_vocab (Dict[str, int]): Vocabulary mapping for entities
-            relation_vocab (Dict[str, int]): Vocabulary mapping for relations
+            params: Comprehensive configuration dictionary containing:
+                - Agent parameters: embedding_size, hidden_size, LSTM_layers, etc.
+                - Training parameters: learning_rate, batch_size, total_iterations
+                - Environment parameters: path_length, num_rollouts, test_rollouts
+                - Evaluation parameters: test_rollouts, eval_every, beam settings
+                - Data parameters: vocab_dir, data_input_dir, output_dir paths
+                - Optimization parameters: grad_clip_norm, gamma, Lambda, beta
+            entity_vocab: Entity name to integer ID mapping for embedding lookup
+            relation_vocab: Relation name to integer ID mapping for embedding lookup  
+            embedding_server: Optional service for generating question embeddings
+                             from natural language text using pre-trained models
+                             
+        Note:
+            - Transfers all parameters to instance attributes for easy access
+            - Creates shared environment to save memory across train/dev/test modes
+            - Disables TensorFlow eager execution for graph-based training
+            - Sets up vocabulary mappings and special token IDs (PAD tokens)
         """
 
         # transfer parameters to self
-        for key, val in params.items(): setattr(self, key, val)
+        for key, val in params.items(): 
+            setattr(self, key, val)
 
+        # shared environment accross modes, save space with graph builder and textual embeddings
         self.environment = EnvNLQ(
             params, 
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab, 
             mode='train',
             embedding_server=embedding_server
-        ) # shared environment accross modes, save space with graph builder and textual embeddings
+        )
         
         # Disable Eager Execution for the rest of the code
+        # but not before initializing Embedding Server
         tf.compat.v1.disable_eager_execution()
 
-        # Agent and Environment
         self.agent = AgentNLQ(
             params, 
             entity_vocab=entity_vocab, 
@@ -90,7 +153,7 @@ class TrainerNLQ(object):
 
         self.save_path = None
 
-        # Provide the vocab2id and id2vocab mappings
+        # Vocabulary mappings for entity and relation conversion
         self.entity_vocab = entity_vocab
         self.relation_vocab = relation_vocab
         self.rev_relation_vocab = self.environment.grapher.rev_relation_vocab
@@ -98,41 +161,48 @@ class TrainerNLQ(object):
         self.ePAD = self.entity_vocab['PAD']
         self.rPAD = self.relation_vocab['PAD']
 
-        # Optimization Algorithms
+        # Training components
         self.baseline = ReactiveBaseline(l=self.Lambda)
         self.optimizer = tf.compat.v1.train.AdamOptimizer(self.learning_rate)
 
 
     def calc_reinforce_loss(self) -> tf.Tensor:
         """
-        Calculate the REINFORCE policy gradient loss with baseline variance reduction.
+        Calculate REINFORCE policy gradient loss with baseline variance reduction.
         
-        Implements the REINFORCE algorithm by:
-        1. Computing per-example losses from agent policy
-        2. Subtracting baseline value for variance reduction
-        3. Normalizing advantages by standard deviation
-        4. Weighting losses by normalized advantages
-        5. Adding entropy regularization for exploration
+        Implements the REINFORCE algorithm for policy gradient training by:
+        1. Computing per-example cross-entropy losses from agent policy
+        2. Subtracting baseline value to reduce variance in gradient estimates
+        3. Normalizing advantages using mean and standard deviation
+        4. Weighting policy losses by normalized advantages  
+        5. Adding entropy regularization to encourage exploration
         
-        The loss encourages actions that lead to higher-than-expected rewards
-        while penalizing those that lead to lower rewards.
+        The resulting loss encourages actions that lead to higher-than-expected
+        rewards while penalizing actions that lead to lower-than-expected rewards.
+        Baseline subtraction and advantage normalization significantly reduce
+        training variance.
         
         Returns:
-            tf.Tensor: Scalar loss value combining policy gradient loss and 
-                entropy regularization, ready for gradient descent optimization.
+            Scalar loss tensor combining weighted policy gradient loss and entropy
+            regularization, ready for gradient descent optimization.
+            
+        Note:
+            - Uses reactive baseline for variance reduction
+            - Advantage normalization prevents gradient explosion
+            - Entropy regularization weight decays during training
+            - Final loss is mean over batch and time dimensions
         """
         loss = tf.stack(self.per_example_loss, axis=1)  # [B, T]
 
         self.tf_baseline = self.baseline.get_baseline_value()
 
-        # multiply with rewards
+        # Compute advantages and normalize for stable training
         final_reward = self.cum_discounted_reward - self.tf_baseline
-
         reward_mean, reward_var = tf.nn.moments(final_reward, axes=[0, 1])
 
         # Constant added for numerical stability
         reward_std = tf.sqrt(reward_var) + 1e-6
-        final_reward =  tf.math.divide(final_reward - reward_mean, reward_std)
+        final_reward = tf.math.divide(final_reward - reward_mean, reward_std)
 
         loss = tf.multiply(loss, final_reward)  # [B, T]
         self.loss_before_reg = loss
@@ -143,46 +213,63 @@ class TrainerNLQ(object):
 
     def entropy_reg_loss(self, all_logits: List[tf.Tensor]) -> tf.Tensor:
         """
-        Calculate entropy regularization loss to encourage exploration.
+        Calculate entropy regularization loss to encourage policy exploration.
         
-        Computes the negative entropy of the policy to add to the main loss.
-        Higher entropy (more uniform action probabilities) gets lower penalty,
-        encouraging the agent to explore different actions rather than being
-        too deterministic early in training.
+        Computes the negative entropy of action probability distributions to
+        encourage exploration during training. Higher entropy (more uniform
+        action probabilities) results in lower penalty, preventing the policy
+        from becoming too deterministic too early in training.
         
         Args:
-            all_logits (List[tf.Tensor]): Log probabilities over actions at each
-                time step. Each tensor has shape [batch_size, max_actions].
+            all_logits: Log probabilities over actions at each time step.
+                List of length T, each tensor shape: [batch_size, max_actions]
                 
         Returns:
-            tf.Tensor: Scalar entropy regularization loss. Negative entropy
-                means higher entropy (exploration) reduces the total loss.
+            Scalar entropy regularization loss. Negative entropy means higher
+            entropy (better exploration) reduces the total training loss.
+            
+        Note:
+            - Stacks logits across time dimension for efficient computation
+            - Uses exp(log_probs) to recover probability distributions
+            - Computes H(π) = -Σ π(a|s) log π(a|s) for each state
+            - Takes mean over batch and action dimensions
         """
         all_logits = tf.stack(all_logits, axis=2)  # [B, MAX_NUM_ACTIONS, T]
         entropy_policy = - tf.reduce_mean(tf.reduce_sum(tf.multiply(tf.exp(all_logits), all_logits), axis=1))  # scalar
         return entropy_policy
 
-    def initialize(self, restore: Optional[str] = None, sess: Optional[tf.compat.v1.Session] = None) -> None:
+    def initialize(self, restore: Optional[str] = None, sess: Optional[tf.compat.v1.Session] = None) -> Union[tf.Operation, None]:
         """
-        Initialize the TensorFlow computational graph and training components.
+        Initialize TensorFlow computational graph and training infrastructure.
         
-        Sets up all placeholders, variables, and operations needed for training:
-        - Input placeholders for candidate actions and questions
-        - Agent policy network and loss computation
-        - Training operations with gradient clipping
+        Constructs the complete TensorFlow graph including:
+        - Input placeholders for candidate actions, questions, and rewards
+        - Agent policy network with forward pass and loss computation
+        - Training operations with gradient clipping and optimization
+        - Test/inference operations for evaluation and beam search
         - Model saving and restoration capabilities
         - Optional pretrained embedding initialization
         
         Args:
-            restore (Optional[str]): Path to checkpoint file for model restoration.
-                If None, initializes with random weights.
-            sess (Optional[tf.Session]): TensorFlow session for initialization.
-                If None, uses current default session.
+            restore: Path to checkpoint file for model restoration. If None,
+                    initializes with random weights according to layer initializers.
+            sess: TensorFlow session for restoration operations. Required if
+                 restore path is provided.
+                 
+        Returns:
+            Variable initializer operation if training from scratch, or None
+            if restoring from checkpoint.
+            
+        Note:
+            - Creates separate graphs for training (full episodes) and testing (single steps)
+            - Uses variable scope reuse for parameter sharing between train/test graphs
+            - Sets up partial_run compatibility for efficient episode processing
+            - Configures model saver for checkpoint management
         """
 
         logger.info("Creating TF graph...")
 
-        # Variables List
+        # Initialize placeholder lists for episode sequences
         self.candidate_relation_sequence = []
         self.candidate_entity_sequence = []
         self.input_path = []                                                                                    # TODO: Remove if unused
@@ -208,6 +295,7 @@ class TrainerNLQ(object):
         self.cum_discounted_reward = tf.compat.v1.placeholder(tf.float32, [None, self.path_length],
                                                     name="cumulative_discounted_reward")
 
+        # Create time-step specific placeholders
         for t in range(self.path_length):
             next_rel = tf.compat.v1.placeholder(tf.int32, [None, self.max_num_actions],
                                                    name=f"next_relations_{t}")                                  # candidate relations from current entity  [B*num_rollouts,]
@@ -223,8 +311,7 @@ class TrainerNLQ(object):
 
         self.loss_before_reg = tf.constant(0.0)
 
-        # Building the computation graph for the agent, calls the forward method and within it, step
-        # Graph for calculating the per-example loss, per-example logits and the action to take
+        # Build training computation graph
         self.per_example_loss, self.per_example_logits, self.action_idx = self.agent(
             self.candidate_relation_sequence,
             self.candidate_entity_sequence,
@@ -234,10 +321,7 @@ class TrainerNLQ(object):
             self.path_length
         )
 
-        # Graph for calculating the Loss
         self.loss_op = self.calc_reinforce_loss()
-
-        # Graph for performing Backpropagation (RL-style)
         self.train_op = self.bp(self.loss_op)
 
         # Building the test graph
@@ -258,36 +342,42 @@ class TrainerNLQ(object):
             self.test_loss, test_state, self.test_logits, self.test_action_idx, self.chosen_relation = self.agent.step(
                 self.next_relations, 
                 self.next_entities, 
-                formated_state,  # Use properly formatted state
+                formated_state,
                 self.prev_relation, 
-                self.question_embedding,                        # TODO: verify if we don't need to initialize a new tf question embedding for testing
+                self.question_embedding,
                 self.current_entities, 
-                self.range_arr                                  # Note: this tf variable is reused
+                self.range_arr
             )
             self.test_state = tf.stack(test_state)
 
         logger.info('TF Graph ready (NLQ).')
-        self.model_saver = tf.compat.v1.train.Saver(max_to_keep=2)  # save the model checkpoints (best 2)
+        self.model_saver = tf.compat.v1.train.Saver(max_to_keep=2)
 
-        # return the variable initializer Op.
         if not restore:
-            return tf.compat.v1.global_variables_initializer()      # initialize all variables
+            return tf.compat.v1.global_variables_initializer()
         else:
-            return  self.model_saver.restore(sess, restore)         # restore checkpoint weights
+            return self.model_saver.restore(sess, restore)
 
 
 
     def initialize_pretrained_embeddings(self, sess: tf.compat.v1.Session) -> None:
         """
-        Load and initialize pretrained embeddings for entities, relations, 
-        and question projector.
+        Load and initialize pretrained embeddings for entities, relations, and question projector.
         
-        If pretrained embedding files are specified in the configuration,
-        loads them and initializes the corresponding embedding lookup tables.
-        This can significantly improve training speed and final performance.
+        Loads pretrained embedding matrices from files and initializes the corresponding
+        lookup tables in the agent. This can significantly improve training speed and
+        final performance by starting with meaningful representations instead of
+        random initializations.
         
         Args:
-            sess (tf.Session): TensorFlow session for running initialization ops.
+            sess: Active TensorFlow session for running initialization operations.
+            
+        Note:
+            - Checks configuration for pretrained embedding file paths
+            - Loads embeddings using numpy for entity and relation tables
+            - Initializes question projector weights if available and variables exist
+            - Skips initialization if files are not specified or variables not created
+            - Warns if question projector variables haven't been created yet
         """
         if self.pretrained_embeddings_action != '':
             embeddings = np.loadtxt(open(self.pretrained_embeddings_action))
@@ -310,17 +400,25 @@ class TrainerNLQ(object):
         """
         Set up backpropagation with baseline update and gradient clipping.
         
-        Creates the training operation that:
-        1. Updates the baseline with current reward
-        2. Computes gradients of cost w.r.t. trainable variables  
-        3. Clips gradients by global norm to prevent exploding gradients
-        4. Applies gradients using Adam optimizer
+        Creates the complete training operation that updates both the policy
+        parameters and the baseline estimator. Includes gradient clipping to
+        prevent exploding gradients, which is crucial for stable training in
+        reinforcement learning settings.
         
         Args:
-            cost (tf.Tensor): Scalar loss tensor to minimize.
+            cost: Scalar loss tensor to minimize through gradient descent.
             
         Returns:
-            tf.Operation: Training operation that updates model parameters.
+            Training operation that when executed performs:
+            - Baseline update with current reward estimates
+            - Gradient computation for all trainable variables
+            - Gradient clipping by global norm for stability
+            - Parameter updates using Adam optimizer
+            
+        Note:
+            - Baseline is updated before gradient computation
+            - Uses control dependencies to ensure proper execution order
+            - Gradient clipping norm is configurable via grad_clip_norm parameter
         """
         self.baseline.update(tf.reduce_mean(self.cum_discounted_reward))
         tvars = tf.compat.v1.trainable_variables()
@@ -336,20 +434,27 @@ class TrainerNLQ(object):
         """
         Calculate cumulative discounted rewards for policy gradient training.
         
-        Computes the discounted return from each time step using the formula:
+        Computes the discounted return G_t from each time step using the formula:
         G_t = R_t + γ*R_{t+1} + γ²*R_{t+2} + ... + γ^{T-t}*R_T
         
-        This provides the expected long-term reward from each state, which
-        serves as the target for the baseline and the weight for policy gradients.
+        This provides the expected long-term reward from each state, which serves
+        as the target for baseline estimation and the weight for policy gradients.
+        The discounting encourages actions that lead to rewards sooner rather
+        than later.
         
         Args:
-            rewards (np.ndarray): Final rewards received at episode end.
-                Shape: [batch_size]
+            rewards: Final rewards received at episode termination.
+                Shape: [batch_size] with values typically in {-1, +1}
                 
         Returns:
-            np.ndarray: Cumulative discounted rewards for each time step.
-                Shape: [batch_size, path_length]. Entry [i,t] is the discounted
-                return from time step t for episode i.
+            Cumulative discounted rewards for all time steps.
+            Shape: [batch_size, path_length] where entry [i,t] represents
+            the discounted return from time step t for episode i.
+            
+        Note:
+            - Only final time step gets immediate reward, others get discounted future
+            - Uses backward iteration for efficient computation
+            - Gamma (discount factor) controls future reward importance
         """
         running_add = np.zeros([rewards.shape[0]])  # [B]
         cum_disc_reward = np.zeros([rewards.shape[0], self.path_length])  # [B, T]
@@ -361,17 +466,25 @@ class TrainerNLQ(object):
 
     def gpu_io_setup(self) -> Tuple[List[tf.Tensor], List[tf.Tensor], List[Dict[tf.Tensor, Any]]]:
         """
-        Set up TensorFlow partial_run configuration for efficient episode processing.
+        Configure TensorFlow partial_run for efficient episode processing.
         
-        Creates the fetches, feeds, and feed_dict structures needed for 
-        TensorFlow's partial_run functionality, which allows dynamic unrolling
-        of episodes while maintaining computational efficiency.
+        Sets up the fetches, feeds, and feed_dict structures required for
+        TensorFlow's partial_run functionality. This enables dynamic episode
+        unrolling while maintaining computational efficiency by pre-declaring
+        all tensors that will be used during training.
         
         Returns:
             Tuple containing:
-                - fetches: List of tensors to fetch during partial_run
-                - feeds: List of placeholder tensors for feeding data
-                - feed_dict: List of feed dictionaries for each hop/step
+                - fetches: List of tensors to fetch during partial_run execution
+                - feeds: List of placeholder tensors for feeding input data  
+                - feed_dict: List of feed dictionaries for each reasoning step,
+                  pre-configured with constant values and None placeholders
+                  for step-specific data
+                  
+        Note:
+            - Enables memory-efficient processing of variable-length episodes
+            - Pre-allocates feed dictionaries to avoid repeated allocation
+            - Separates constant (question, range) and step-varying inputs
         """
         # create fetches for partial_run_setup
         fetches = self.per_example_loss  + self.action_idx + [self.loss_op] + self.per_example_logits + [self.dummy]
@@ -386,7 +499,8 @@ class TrainerNLQ(object):
         feed_dict[0][self.first_state_of_test] = False # TODO: Remove this if unused
         feed_dict[0][self.question_embedding] = None
         feed_dict[0][self.range_arr] = np.arange(self.batch_size*self.num_rollouts)
-        # The following placeholders vary across the hops/steps:
+        
+        # Configure step-varying placeholders
         for i in range(self.path_length):
             feed_dict[i][self.input_path[i]] = np.zeros(self.batch_size * self.num_rollouts)  # TODO: Remove this if unused
             feed_dict[i][self.candidate_relation_sequence[i]] = None
@@ -397,23 +511,32 @@ class TrainerNLQ(object):
 
     def train(self, sess: tf.compat.v1.Session) -> None:
         """
-        Execute multiple episodes of MINERVA training using policy gradients
-        until a max number of episodes have been completed.
+        Execute the complete MINERVA training loop using policy gradient reinforcement learning.
 
-        Performs the complete training loop:
-        1. Iterates through all training episodes
-        2. For each episode, unrolls the policy for path_length steps
-        3. Collects actions, logits, and losses at each step
-        4. Computes final rewards and discounted returns
-        5. Updates policy parameters using REINFORCE algorithm
-        6. Updates baseline for variance reduction
-        7. Logs training statistics and progress
+        Performs episodic training where each episode involves multi-hop reasoning
+        through the knowledge graph. The training loop:
+        1. Iterates through training data until maximum episodes completed
+        2. For each episode, unrolls policy for path_length steps
+        3. Collects actions, logits, and losses at each reasoning step
+        4. Computes final rewards based on answer correctness
+        5. Calculates discounted returns for policy gradient weighting
+        6. Updates policy parameters using REINFORCE algorithm
+        7. Updates baseline estimator for variance reduction
+        8. Logs comprehensive training statistics and progress
+        9. Periodically evaluates on development data and saves models
         
-        Uses TensorFlow's partial_run for efficient episode processing,
-        allowing dynamic unrolling while maintaining computational efficiency.
+        Uses TensorFlow's partial_run for memory-efficient episode processing,
+        enabling dynamic unrolling while maintaining computational efficiency.
         
         Args:
-            sess (tf.Session): Active TensorFlow session for training operations.
+            sess: Active TensorFlow session for executing training operations.
+            
+        Note:
+            - Training continues until total_iterations batches are processed
+            - Evaluation occurs every eval_every batches on development set
+            - Model checkpointing based on development set performance
+            - Comprehensive logging includes hits, rewards, and loss statistics
+            - Memory usage monitoring and garbage collection for stability
         """
         logger.info("Starting training...")
         fetches, feeds, feed_dict = self.gpu_io_setup()
@@ -465,7 +588,7 @@ class TrainerNLQ(object):
                 feed_dict={self.cum_discounted_reward: cum_discounted_reward}
             )
 
-            # Calculate the Loss and Average Reward
+            # Update training statistics
             train_loss = 0.98 * train_loss + 0.02 * batch_total_loss
             avg_reward = np.mean(rewards)
             if np.isnan(train_loss):
@@ -478,14 +601,14 @@ class TrainerNLQ(object):
             reward_reshape = (reward_reshape > 0)
             num_ep_correct = np.sum(reward_reshape)
 
-            # Log the Statistics
+            # Log training progress
             logger.info(
                 f"batch_counter: {self.batch_counter:<4d}, num_hits: {np.sum(rewards):<7.4f}, "
                 f"avg. reward per batch: {avg_reward:<7.4f}, num_ep_correct: {num_ep_correct:<4d}, "
                 f"avg_ep_correct: {num_ep_correct / self.batch_size:<7.4f}, train_loss: {train_loss:<7.4f}"
             )
 
-            # Store current performance, logger path, and evaluate with dev
+            # Periodic evaluation and model saving
             if self.batch_counter % self.eval_every == 0:
                 with open(os.path.join(self.output_dir, 'scores.txt'), 'a') as score_file:
                     score_file.write("Score for iteration " + str(self.batch_counter) + "\n")
@@ -504,37 +627,41 @@ class TrainerNLQ(object):
                 break
 
     def test(self, sess: tf.compat.v1.Session, beam: bool = False, print_paths: bool = False, 
-             save_model: bool = True, mode='dev') -> Tuple[float, float, float, float, float]:
+             save_model: bool = True, mode: str = 'dev') -> Tuple[float, float, float, float, float]:
         """
-        Evaluate the trained MINERVA agent on test data with multiple metrics.
+        Evaluate the trained MINERVA agent with comprehensive metrics and optional beam search.
         
-        Performs comprehensive evaluation including:
-        - Hits@K metrics (K=1,3,5,10,20) for answer prediction accuracy
-        - Mean Reciprocal Rank (MRR) for ranking quality assessment  
-        - Optional beam search for improved performance
-        - Path visualization and analysis
-        - Model checkpointing based on performance
+        Performs thorough evaluation on test/dev data including:
+        - Hits@K metrics (K=1,3,5,10,20) measuring answer prediction accuracy
+        - Mean Reciprocal Rank (MRR) for ranking quality assessment
+        - Optional beam search for improved inference performance  
+        - Detailed path visualization and reasoning trajectory analysis
+        - Model checkpointing based on performance improvements
         
-        The evaluation uses multiple rollouts per question and aggregates results
-        to provide robust performance estimates across different reasoning paths.
+        The evaluation uses multiple rollouts per question and supports two
+        aggregation modes: 'max' (best rollout) and 'sum' (score aggregation).
         
         Args:
-            sess (tf.Session): Active TensorFlow session for inference.
-            beam (bool, optional): Whether to use beam search decoding.
-                Defaults to False (greedy decoding).
-            print_paths (bool, optional): Whether to print reasoning paths.
-                Defaults to False.
-            save_model (bool, optional): Whether to save model if performance improves.
-                Defaults to True.
-            auc (bool, optional): Whether to compute AUC metrics. Defaults to False.
+            sess: Active TensorFlow session for inference operations.
+            beam: Whether to use beam search decoding instead of greedy selection.
+                 Beam search typically improves performance but increases computation.
+            print_paths: Whether to generate detailed reasoning path logs for analysis.
+            save_model: Whether to save model checkpoint if performance improves.
+            mode: Data split to evaluate on ('dev', 'test', or 'train').
                 
         Returns:
-            Tuple[float, float, float, float, float]: Performance metrics:
-                - Hits@1: Fraction of queries with correct answer in top 1
-                - Hits@3: Fraction of queries with correct answer in top 3  
-                - Hits@5: Fraction of queries with correct answer in top 5
-                - Hits@10: Fraction of queries with correct answer in top 10
-                - Hits@20: Fraction of queries with correct answer in top 20
+            Tuple of performance metrics:
+                - Hits@1: Fraction with correct answer in top 1 prediction
+                - Hits@3: Fraction with correct answer in top 3 predictions  
+                - Hits@5: Fraction with correct answer in top 5 predictions
+                - Hits@10: Fraction with correct answer in top 10 predictions
+                - Hits@20: Fraction with correct answer in top 20 predictions
+                
+        Note:
+            - Hits@N metrics depend on number of rollouts (capped at rollout count)
+            - Uses different scoring strategies based on self.pool setting
+            - Beam search maintains multiple reasoning paths for better coverage
+            - Path logging provides detailed analysis of reasoning trajectories
         """
         # NOTE: Hits@N are based on the num of rollouts, each respective rollout's scores, 
         # and how many arrived at the correct answer, this is not Entity Ranking as in KGE
@@ -826,33 +953,37 @@ class TrainerNLQ(object):
         """
         Extract top-k indices from beam search scores for each batch element.
         
-        Used in beam search decoding to select the k highest-scoring paths
-        from the expanded search space at each time step.
+        Efficiently selects the k highest-scoring actions from the expanded
+        search space during beam search decoding. Used to maintain the most
+        promising reasoning paths while pruning lower-scoring alternatives.
         
         Args:
-            scores (np.ndarray): Beam search scores for each batch element.
-                Shape: [batch_size, k * max_num_actions] where k is beam size.
-            k (int): Number of top scoring paths to keep (beam size).
+            scores: Beam search scores for each batch element and action.
+                Shape: [batch_size, k * max_num_actions] where k is current beam size.
+            k: Number of top-scoring paths to retain for continued search.
             
         Returns:
-            np.ndarray: Flattened indices of top-k scoring actions.
-                Shape: [batch_size * k]. Can be reshaped to [batch_size, k]
-                to get top-k indices for each batch element.
+            Flattened indices of top-k scoring actions across all batch elements.
+            Shape: [batch_size * k] containing action indices that can be
+            used to select corresponding actions and beam states.
+            
+        Note:
+            - Reshapes and sorts scores to find global top-k per batch element
+            - Returns flattened indices for efficient tensor indexing operations
+            - Critical component of beam search maintaining search diversity
         """
         scores = scores.reshape(-1, k * self.max_num_actions)  # [B, (k*max_num_actions)]
         idx = np.argsort(scores, axis=1)
         idx = idx[:, -k:]  # take the last k highest indices # [B , k]
         return idx.reshape((-1))
 
-if __name__ == '__main__':##
-
-    # read command line options
+if __name__ == '__main__':
+    # Read command line options and setup logging
     options = read_options_nlq()
 
     # Set logging
     logger.setLevel(logging.INFO)
-    fmt = logging.Formatter('%(asctime)s: [ %(message)s ]',
-                            '%Y/%m/%d %I:%M:%S %p')
+    fmt = logging.Formatter('%(asctime)s: [ %(message)s ]', '%Y/%m/%d %I:%M:%S %p')
     console = logging.StreamHandler()
     console.setFormatter(fmt)
     logger.addHandler(console)
@@ -860,7 +991,7 @@ if __name__ == '__main__':##
     logfile.setFormatter(fmt)
     logger.addHandler(logfile)
 
-    # Reading the vocab files
+    # Load vocabularies
     logger.info('Reading vocab files (ent & rel to id)...')
     relation_vocab = json.load(open(os.path.join(options['vocab_dir'], 'relation_vocab.json')))
     entity_vocab = json.load(open(os.path.join(options['vocab_dir'], 'entity_vocab.json')))
@@ -868,6 +999,7 @@ if __name__ == '__main__':##
     logger.info('Total number of entities {}'.format(len(entity_vocab)))
     logger.info('Total number of relations {}'.format(len(relation_vocab)))
 
+    # Configure TensorFlow
     save_path = ''
     config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = False
@@ -878,7 +1010,7 @@ if __name__ == '__main__':##
 
     embedding_server = EmbeddingServer(options['question_tokenizer_name'])
 
-    # Training a model from scratch
+    # Training phase
     if not options['load_model']:
         trainer = TrainerNLQ(
             options, 
@@ -905,7 +1037,7 @@ if __name__ == '__main__':##
         path_logger_file = options['path_logger_file']
         output_dir = options['output_dir']
 
-    # Evaluating Model, will require new initialization to avoid graph errors
+    # Evaluation phase
     trainer = TrainerNLQ(
         options, 
         entity_vocab=entity_vocab, 
