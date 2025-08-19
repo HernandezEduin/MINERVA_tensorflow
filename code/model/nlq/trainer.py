@@ -18,7 +18,6 @@ Key components:
 Classes:
     TrainerNLQ: Main trainer class for MINERVA NLQ reasoning
 """
-# TODO: Add WANDB Code
 # TODO: Inspect best saving for checkpoints
 # TODO: Load the model in a separate file to check if everything is working fine
 
@@ -39,6 +38,8 @@ import numpy as np
 import tensorflow as tf
 from scipy.special import logsumexp as lse
 from tqdm import tqdm
+
+import wandb
 
 from code.data.embedding_server import EmbeddingServer
 from code.model.baseline import ReactiveBaseline
@@ -141,7 +142,9 @@ class TrainerNLQ(object):
         seed: int,
         entity_vocab: Dict[str, int],
         relation_vocab: Dict[str, int],
-        embedding_server: Optional[EmbeddingServer] = None
+        use_beam: Optional[bool] = False,
+        embedding_server: Optional[EmbeddingServer] = None,
+        use_wandb: bool = False
     ) -> None:
         """
         Initialize the MINERVA trainer with all necessary components for training and evaluation.
@@ -185,7 +188,8 @@ class TrainerNLQ(object):
             pool: Pooling method for evaluation of rollouts ('max', 'sum')
             seed: Random seed for reproducibility
             entity_vocab: Entity name to integer ID mapping for embedding lookup
-            relation_vocab: Relation name to integer ID mapping for embedding lookup  
+            relation_vocab: Relation name to integer ID mapping for embedding lookup
+            use_beam: Whether to use beam search during decoding
             embedding_server: Optional service for generating question embeddings
                              from natural language text using pre-trained models
                              
@@ -228,7 +232,12 @@ class TrainerNLQ(object):
         self.pretrained_embeddings_entity = pretrained_embeddings_entity
         self.pretrained_question_projector = pretrained_question_projector
         self.pool = pool
+        self.use_beam = use_beam
         self.seed = seed
+        self.use_wandb = use_wandb
+
+        # Debug logging for WANDB
+        logger.info(f"Trainer initialized with use_wandb={self.use_wandb}")
 
         # shared environment accross modes, save space with graph builder and textual embeddings
         self.environment = EnvNLQ(
@@ -472,6 +481,7 @@ class TrainerNLQ(object):
 
 
     def initialize_pretrained_embeddings(self, sess: tf.compat.v1.Session) -> None:
+        # TODO: Inspect if this is actually used, cause the pretrained paths are kept empty
         """
         Load and initialize pretrained embeddings for entities, relations, and question projector.
         
@@ -718,15 +728,25 @@ class TrainerNLQ(object):
                 f"avg_ep_correct: {num_ep_correct / self.batch_size:<7.4f}, train_loss: {train_loss:<7.4f}"
             )
 
+            # Log training metrics to WANDB
+            if self.use_wandb:
+                wandb.log({
+                    'train/batch_counter': self.batch_counter,
+                    'train/loss': float(train_loss),
+                    'train/batch_total_loss': float(batch_total_loss),
+                    'train/num_hits': float(np.sum(rewards)),
+                    'train/avg_reward': float(avg_reward),
+                    'train/num_ep_correct': int(num_ep_correct),
+                    'train/avg_ep_correct': float(num_ep_correct / self.batch_size),
+                    'train/memory_usage_kb': int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+                }, step=self.batch_counter)
+
             # Periodic evaluation and model saving
             if self.batch_counter % self.eval_every == 0:
                 with open(os.path.join(self.output_dir, 'scores.txt'), 'a') as score_file:
                     score_file.write("Score for iteration " + str(self.batch_counter) + "\n")
-                
-                # os.makedirs(os.path.join(self.path_logger_file, str(self.batch_counter)), exist_ok=True)
-                # self.path_logger_file_ = os.path.join(self.path_logger_file, str(self.batch_counter), "paths")
 
-                self.test(sess, beam=True, print_paths=False, mode='dev')
+                self.test(sess, beam=self.use_beam, print_paths=False, mode='dev')
 
                 # Important: Change back to training mode to change the data
                 self.environment.change_mode('train')
@@ -1061,6 +1081,44 @@ class TrainerNLQ(object):
         logger.info(f"Hits@20: {all_final_reward_20:7.4f}")
         logger.info(f"MRR: {mrr:7.4f}")
 
+        # Log evaluation metrics to WANDB
+        if self.use_wandb:
+            logger.info(f"Logging {mode} evaluation metrics to WANDB...")
+            logger.info(f"WANDB run state: {wandb.run is not None}")
+            logger.info(f"WANDB run id: {wandb.run.id if wandb.run else 'None'}")
+            try:
+                wandb.log({
+                    f'{mode}/hits@1': float(all_final_reward_1),
+                    f'{mode}/hits@3': float(all_final_reward_3),
+                    f'{mode}/hits@5': float(all_final_reward_5),
+                    f'{mode}/hits@10': float(all_final_reward_10),
+                    f'{mode}/hits@20': float(all_final_reward_20),
+                    f'{mode}/mrr': float(mrr),
+                    f'{mode}/total_examples': int(total_examples)
+                })  # Let WANDB auto-assign step for evaluation metrics
+                logger.info(f"Successfully logged {mode} metrics to WANDB")
+            except Exception as e:
+                logger.error(f"Failed to log {mode} metrics to WANDB: {e}")
+                logger.error(f"WANDB run state after error: {wandb.run is not None}")
+        else:
+            logger.info(f"WANDB logging disabled for {mode} evaluation")
+
+        return all_final_reward_1, all_final_reward_3, all_final_reward_5, all_final_reward_10, all_final_reward_20
+
+    def finish_wandb(self) -> None:
+        """
+        Properly finish the WANDB run and cleanup resources.
+        
+        Should be called at the end of training to ensure proper cleanup
+        and finalization of the WANDB run.
+        """
+        if self.use_wandb:
+            try:
+                if wandb.run is not None:
+                    wandb.finish()
+            except Exception as e:
+                logger.warning(f"Error finishing WANDB session: {e}")
+
     def top_k(self, scores: np.ndarray, k: int) -> np.ndarray:
         """
         Extract top-k indices from beam search scores for each batch element.
@@ -1157,10 +1215,12 @@ if __name__ == '__main__':
             pretrained_embeddings_entity=options['pretrained_embeddings_entity'],
             pretrained_question_projector=options['pretrained_question_projector'],
             pool=options['pool'],
+            use_beam=options['use_beam'],
             seed=options['seed'],
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab, 
-            embedding_server=embedding_server
+            embedding_server=embedding_server,
+            use_wandb=options.get('track', False)
         )
         with tf.compat.v1.Session(config=config) as sess:
             # Set seeds again after session creation to ensure TF operations are deterministic
@@ -1216,10 +1276,12 @@ if __name__ == '__main__':
         pretrained_embeddings_entity=options['pretrained_embeddings_entity'],
         pretrained_question_projector=options['pretrained_question_projector'],
         pool=options['pool'],
+        use_beam=options['use_beam'],
         seed=options['seed'],
         entity_vocab=entity_vocab, 
         relation_vocab=relation_vocab, 
-        embedding_server=embedding_server
+        embedding_server=embedding_server,
+        use_wandb=options.get('track', False)  # Enable WANDB for evaluation if tracking is on
     )
     
     with tf.compat.v1.Session(config=config) as sess:
@@ -1230,13 +1292,17 @@ if __name__ == '__main__':
         trainer.test_rollouts = 100                      # set test rollouts to 100 for evaluation
 
         # create files to store results
-        os.makedirs(os.path.join(path_logger_file, "test_beam"), exist_ok=True)
-        trainer.path_logger_file_ = os.path.join(path_logger_file, "test_beam", "paths")
+        if options['print_paths']:
+            os.makedirs(os.path.join(path_logger_file, "test_beam"), exist_ok=True)
+            trainer.path_logger_file_ = os.path.join(path_logger_file, "test_beam", "paths")
+        
         with open(os.path.join(output_dir, 'scores.txt'), 'a') as score_file:
             score_file.write("Test (beam) scores with best model from " + save_path + "\n")
 
         # Perform Evaluation
-        trainer.test(sess, beam=True, print_paths=True, save_model=False, mode='test')
+        trainer.test(sess, beam=options['use_beam'], print_paths=options['print_paths'], save_model=False, mode='test')
+
     
     logging.info(f"Evaluation completed. Closing Server")
     embedding_server.close()  # Close the embedding server connection
+    trainer.finish_wandb()

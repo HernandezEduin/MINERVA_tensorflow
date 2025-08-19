@@ -5,6 +5,8 @@ import os
 import argparse
 import time
 
+import wandb
+
 from pprint import pprint
 
 from typing import Dict, Any
@@ -51,16 +53,16 @@ def read_options() -> Dict[str, Any]:
 
     # QA Dataset
     parser.add_argument('--raw_QAData_path', type=str, default="",
-                         help="Path to the raw QA CSV dataset")
+                         help="Path to the raw QA CSV dataset. Only required for NLQ Task.")
     parser.add_argument('--cached_QAMetaData_path', type=str, default="",
-                         help="Path to cached tokenized QA metadata JSON file")
+                         help="Path to cached tokenized QA metadata JSON file. Only required for NLQ Task.")
     parser.add_argument('--force_data_prepro', '-f', action="store_true",
                          help="Force re-processing of QA data, even if cache exists")
     
     # Textual Embedding (LLMs)
     parser.add_argument("--question_tokenizer_name", type=str, default="bert-base-uncased",
-                         help="Tokenizer name for question embeddings")
-    
+                         help="Tokenizer name for question embeddings. Only required for NLQ Task.")
+
     # LSTM/Neural Network Architecture
     parser.add_argument("--hidden_size", default=50, type=int,
                         help="Hidden state size for LSTM layers")
@@ -85,8 +87,6 @@ def read_options() -> Dict[str, Any]:
                         help="Number of rollout trajectories per question during training")
     parser.add_argument("--test_rollouts", default=100, type=int,
                         help="Number of rollout trajectories per question during evaluation")
-    parser.add_argument("--pool", default="max", type=str, choices=["max", "sum"],
-                        help="Pooling method for Evaluation of Rollouts ('max', 'sum')")
     parser.add_argument("--positive_reward", default=1.0, type=float,
                         help="Reward value when agent reaches the correct answer entity")
     parser.add_argument("--negative_reward", default=0, type=float,
@@ -111,7 +111,15 @@ def read_options() -> Dict[str, Any]:
                         help="Frequency of evaluation (every N training iterations)")
     parser.add_argument("--nell_evaluation", default='False', type=str2bool,
                         help="Whether to perform NELL evaluation. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
-    
+
+    # Evaluation Config
+    parser.add_argument("--pool", default="max", type=str, choices=["max", "sum"],
+                        help="Pooling method for Evaluation of Rollouts ('max', 'sum')")
+    parser.add_argument("--use_beam", default='False', type=str2bool,
+                        help="Whether to use beam search during decoding. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
+    parser.add_argument("--print_paths", default='False', type=str2bool,
+                        help="Whether to print the reasoning paths taken by the agent. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
+
     # Model Loading and Saving
     parser.add_argument("--model_dir", default="", type=str,
                         help="Directory to save trained model checkpoints")
@@ -122,9 +130,15 @@ def read_options() -> Dict[str, Any]:
     parser.add_argument("--base_output_dir", default="", type=str,
                         help="Base directory for all output files and logs")
     
-    # Logging
+    # Logging and Tracking
     parser.add_argument("--log_file_name", default="reward.txt", type=str,
                         help="Name of the main log file")
+    parser.add_argument('--wandb_project', type=str, default='', 
+                        help='Weights & Biases project name for experiment tracking')
+    parser.add_argument('--wandb_name', type=str, default='',
+                        help='Custom name for this specific run (optional)')
+    parser.add_argument('--track', default='False', type=str2bool,
+                        help='Enable Weights & Biases tracking. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)')
     parser.add_argument("--timestamp", type=str, default=None,
                          help="Timestamp for the run. If None, current time is used.")
     
@@ -146,14 +160,53 @@ def read_options() -> Dict[str, Any]:
         local_time = time.localtime()
         parsed['timestamp'] = time.strftime("%Y%m%d_%H%M%S", local_time)
 
+    if parsed['track']:
+        if parsed['wandb_project'] == '':
+            raise ValueError('wandb_project must be specified if tracking is enabled.')
+        
+        # Extract dataset name for run naming
+        dataset_name = parsed['data_input_dir'].split('/')[-1] if parsed['data_input_dir'] else 'unknown'
+        run_name = parsed['wandb_name'] if parsed['wandb_name'] else f"minerva-{dataset_name}-{parsed['timestamp']}"
+        
+        wandb.init(
+            project=parsed['wandb_project'],
+            name=run_name,
+            config=parsed
+        )
+        
+        # Check if we're in a sweep - if so, overwrite parameters with sweep config
+        if wandb.run.sweep_id is not None:
+            print(f"Running WANDB sweep: {wandb.run.sweep_id}")
+            print("Overwriting parameters with sweep configuration...")
+            
+            # Parameters that should NOT be overwritten by sweeps
+            protected_params = {
+                'timestamp', 'output_dir', 'model_dir', 'path_logger_file', 
+                'log_file_name', 'base_output_dir', 'data_input_dir', 
+                'vocab_dir', 'raw_QAData_path', 'cached_QAMetaData_path',
+                'wandb_project', 'wandb_name', 'track'
+            }
+            
+            # Update parsed with swept parameters from wandb.config
+            for key, value in wandb.config.items():
+                if key in parsed and key not in protected_params:
+                    old_value = parsed[key]
+                    parsed[key] = value
+                    print(f"  {key}: {old_value} -> {value}")
+                elif key in protected_params:
+                    print(f"  {key}: protected from override (keeping: {parsed[key]})")
+        else:
+            print("Running in tracking mode - keeping original parameters")
+
     # TODO: Avoid creating a directory if loading a model
-    # Preparing Directories for model saving and logging
+    # Preparing Directories for model saving and logging (AFTER parameter override)
     parsed['output_dir'] = os.path.join(parsed['base_output_dir'], parsed['timestamp'])
     parsed['model_dir'] = os.path.join(parsed['output_dir'], 'model/')
     parsed['path_logger_file'] = parsed['output_dir']
     parsed['log_file_name'] = os.path.join(parsed['output_dir'], 'log.txt')
     os.makedirs(parsed['output_dir'])
     os.mkdir(parsed['model_dir'])
+
     with open(os.path.join(parsed['output_dir'], 'config.txt'), 'w') as out:
         pprint(parsed, stream=out)
 
