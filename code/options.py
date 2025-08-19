@@ -1,10 +1,14 @@
 from __future__ import absolute_import
 from __future__ import division
+
+import os
 import argparse
 import uuid
-import os
+import time
+
 from pprint import pprint
 
+from typing import Dict, Any
 
 def read_options():
     parser = argparse.ArgumentParser()
@@ -79,7 +83,7 @@ def read_options():
     for keyPair in sorted(parsed.items()): print(fmtString % keyPair)
     return parsed
 
-def read_options_nlq():
+def read_options_nlq() -> Dict[str, Any]:
     parser = argparse.ArgumentParser(
         description="""
         MINERVA NLQ (Natural Language Question) Trainer Configuration
@@ -134,14 +138,11 @@ def read_options_nlq():
     # Embedding Configuration
     parser.add_argument("--embedding_size", default=50, type=int,
                         help="Embedding dimension for entities and relations. Keep in mind that each will be doubled.")
-    # TODO: Replace with str2bool
-    parser.add_argument("--use_entity_embeddings", default=0, type=int,
+    parser.add_argument("--use_entity_embeddings", default=0, type=str2bool,
                         help="Whether to use entity embeddings (1) or not (0)")
-    # TODO: Replace with str2bool
-    parser.add_argument("--train_entity_embeddings", default=0, type=int,
+    parser.add_argument("--train_entity_embeddings", default=0, type=str2bool,
                         help="Whether to fine-tune entity embeddings during training (1) or keep frozen (0)")
-    # TODO: Replace with str2bool
-    parser.add_argument("--train_relation_embeddings", default=1, type=int,
+    parser.add_argument("--train_relation_embeddings", default=1, type=str2bool,
                         help="Whether to train relation embeddings (1) or keep frozen (0)")
     
     # Reinforcement Learning
@@ -182,8 +183,7 @@ def read_options_nlq():
                         help="Directory to save trained model checkpoints")
     parser.add_argument("--model_load_dir", default="", type=str,
                         help="Directory to load pre-trained model from")
-    # TODO: Replace with str2bool
-    parser.add_argument("--load_model", default=0, type=int,
+    parser.add_argument("--load_model", default=0, type=str2bool,
                         help="Whether to load a pre-trained model (1) or train from scratch (0)")
     parser.add_argument("--base_output_dir", default="", type=str,
                         help="Base directory for all output files and logs")
@@ -191,6 +191,8 @@ def read_options_nlq():
     # Logging
     parser.add_argument("--log_file_name", default="reward.txt", type=str,
                         help="Name of the main log file")
+    parser.add_argument("--timestamp", type=str, default=None,
+                         help="Timestamp for the run. If None, current time is used.")
     
     # Miscellaneous
     parser.add_argument("--seed", type=int, default=42,
@@ -201,26 +203,23 @@ def read_options_nlq():
     except IOError as msg:
         parser.error(str(msg))
 
-    parsed['use_entity_embeddings'] = (parsed['use_entity_embeddings'] == 1)
-    parsed['train_entity_embeddings'] = (parsed['train_entity_embeddings'] == 1)
-    parsed['train_relation_embeddings'] = (parsed['train_relation_embeddings'] == 1)
-
     parsed['pretrained_embeddings_action'] = ""
     parsed['pretrained_embeddings_entity'] = ""
     parsed['pretrained_question_projector'] = ""
 
-    parsed['output_dir'] = parsed['base_output_dir'] + '/' + str(uuid.uuid4())[:4]+'_'+str(parsed['path_length'])+'_'+str(parsed['beta'])+'_'+str(parsed['test_rollouts'])+'_'+str(parsed['Lambda'])
+    if parsed['timestamp'] is None:
+        local_time = time.localtime()
+        parsed['timestamp'] = time.strftime("%Y%m%d_%H%M%S", local_time)
 
-    parsed['model_dir'] = parsed['output_dir']+'/'+ 'model/'
-
-    parsed['load_model'] = (parsed['load_model'] == 1)
+    parsed['output_dir'] = os.path.join(parsed['base_output_dir'], parsed['timestamp'])
+    parsed['model_dir'] = os.path.join(parsed['output_dir'], 'model/')
 
     ##Logger##
     parsed['path_logger_file'] = parsed['output_dir']
-    parsed['log_file_name'] = parsed['output_dir'] +'/log.txt'
+    parsed['log_file_name'] = os.path.join(parsed['output_dir'], 'log.txt')
     os.makedirs(parsed['output_dir'])
     os.mkdir(parsed['model_dir'])
-    with open(parsed['output_dir']+'/config.txt', 'w') as out:
+    with open(os.path.join(parsed['output_dir'], 'config.txt'), 'w') as out:
         pprint(parsed, stream=out)
 
     # print and return
@@ -229,3 +228,31 @@ def read_options_nlq():
     print('Arguments:')
     for keyPair in sorted(parsed.items()): print(fmtString % keyPair)
     return parsed
+
+def str2bool(string):
+    """
+    Converts a string input to a boolean value.
+    
+    Args:
+        string (str): The string to convert ('yes', 'true', 'no', 'false', etc.).
+    
+    Returns:
+        bool: The corresponding boolean value.
+    
+    Raises:
+        argparse.ArgumentTypeError: If the input cannot be converted to a boolean.
+    """
+    if isinstance(string, bool):
+       return string
+    
+    if isinstance(string, int):
+        return bool(string)
+   
+    if string.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif string.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    elif string.lower() in ('none'):
+        return None
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
