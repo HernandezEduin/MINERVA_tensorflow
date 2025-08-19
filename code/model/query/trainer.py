@@ -13,7 +13,7 @@ tf.compat.v1.disable_eager_execution()
 from code.model.query.agent import Agent
 from code.options import read_options
 from code.model.query.environment import env
-from code.data.data_utils import set_seeds
+from code.data.setup import set_seeds
 import codecs
 from collections import defaultdict
 import gc
@@ -740,6 +740,7 @@ if __name__ == '__main__':
     config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = False
     config.log_device_placement = False
+    config.allow_soft_placement = True
 
     # Set seed for reproducibility
     set_seeds(options['seed'])
@@ -748,6 +749,8 @@ if __name__ == '__main__':
     if not options['load_model']:
         trainer = Trainer(options)
         with tf.compat.v1.Session(config=config) as sess:
+            # Set seeds again after session creation to ensure TF operations are deterministic
+            set_seeds(options['seed'])
             sess.run(trainer.initialize())
             trainer.initialize_pretrained_embeddings(sess=sess)
 
@@ -768,6 +771,9 @@ if __name__ == '__main__':
         path_logger_file = trainer.path_logger_file
         output_dir = trainer.output_dir
     with tf.compat.v1.Session(config=config) as sess:
+        # Set seeds again after session creation to ensure TF operations are deterministic  
+        set_seeds(options['seed'])
+        
         trainer.initialize(restore=save_path, sess=sess)
 
         trainer.test_rollouts = 100
@@ -783,6 +789,6 @@ if __name__ == '__main__':
 
 
         print(options['nell_evaluation'])
-        if options['nell_evaluation'] == 1:
+        if options['nell_evaluation']:
             nell_eval(path_logger_file + "/" + "test_beam/" + "pathsanswers", trainer.data_input_dir+'/sort_test.pairs' )
 

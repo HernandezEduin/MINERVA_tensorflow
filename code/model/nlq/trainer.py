@@ -49,7 +49,7 @@ from code.model.baseline import ReactiveBaseline
 from code.model.nlq.agent import AgentNLQ
 from code.model.nlq.environment import EnvNLQ
 from code.data.setup import set_seeds
-from code.options import read_options_nlq
+from code.options import read_options
 
 from typing import Dict, Any, List, Tuple, Optional, Union
 
@@ -998,7 +998,7 @@ class TrainerNLQ(object):
 
 if __name__ == '__main__':
     # Read command line options and setup logging
-    options = read_options_nlq()
+    options = read_options()
 
     # Set logging
     logger.setLevel(logging.INFO)
