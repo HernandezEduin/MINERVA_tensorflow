@@ -124,7 +124,7 @@ def process_and_cache_triviaqa_data(
     
     The function expects CSV data with specific column structure:
     - Question: Natural language questions
-    - Query-Entity: Starting entity for reasoning
+    - Source-Entity: Starting entity for reasoning
     - Answer-Entity: Target answer entity
     - Paths: (Optional) Reasoning paths as string representations of lists
     - Hops: (Optional) Number of reasoning hops
@@ -162,11 +162,11 @@ def process_and_cache_triviaqa_data(
     # Load and validate CSV data
     csv_df = pd.read_csv(raw_QAData_path)
     assert len(csv_df.columns) > 2, \
-        "CSV file must have at least 3 columns (Question, Query-Entity, Answer-Entity)"
+        "CSV file must have at least 3 columns (Question, Source-Entity, Answer-Entity)"
     
     # Extract required columns
     questions = csv_df["Question"]
-    query_ent = csv_df["Query-Entity"] 
+    source_ent = csv_df["Source-Entity"] 
     answer_ent = csv_df["Answer-Entity"]
     
     # Extract optional columns
@@ -184,7 +184,7 @@ def process_and_cache_triviaqa_data(
     )
 
     # Map entities and relations to integer IDs
-    mapped_query_ent = query_ent.map(lambda ent: entity2id[ent])
+    mapped_source_ent = source_ent.map(lambda ent: entity2id[ent])
     mapped_answer_ent = answer_ent.map(lambda ent: entity2id[ent])
     if paths is not None:
         mapped_paths = paths.map(
@@ -214,7 +214,7 @@ def process_and_cache_triviaqa_data(
     }
 
     # Combine all processed data into final DataFrame
-    data_columns = [tokenized_questions, mapped_query_ent, mapped_answer_ent]
+    data_columns = [tokenized_questions, mapped_source_ent, mapped_answer_ent]
     if paths is not None:
         data_columns.append(mapped_paths)
     if hops is not None:
@@ -259,7 +259,7 @@ def process_and_cache_triviaqa_data(
     metadata: Dict[str, Any] = {
         "question_tokenizer": question_tokenizer.name_or_path,
         "question_column": "Question",
-        "query_entities_column": "Query-Entity",
+        "source_entities_column": "Source-Entity",
         "answer_entity_column": "Answer-Entity",
         "paths_column": "Paths",
         "hops_column": "Hops",

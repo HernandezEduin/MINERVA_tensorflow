@@ -19,12 +19,9 @@ Classes:
     TrainerNLQ: Main trainer class for MINERVA NLQ reasoning
 """
 # TODO: Remove params and instead use variables to not obsfuscate the code
-# TODO: Add more training arguments
-# TODO: Organize the training arguments
 # TODO: Add WANDB Code
 # TODO: Inspect best saving for checkpoints
 # TODO: Load the model in a separate file to check if everything is working fine
-# TODO: Replace Query-Entity with Source-Entity
 
 from __future__ import absolute_import
 from __future__ import division

@@ -231,7 +231,7 @@ For the enhanced NLQ framework, you'll need additional data files to support nat
 2. **Question-Answer Dataset** (CSV format):
    A CSV file containing the following columns:
    - `Question`: Natural language question text (e.g., "Who is the father of John's brother?")
-   - `Query-Entity`: Starting entity for graph navigation (entity name, not ID)
+   - `Source-Entity`: Starting entity for graph navigation (entity name, not ID)
    - `Answer-Entity`: Target answer entity (entity name, not ID)
 
 #### Example NLQ Dataset Structure
@@ -246,7 +246,7 @@ dataset_nlq/
 
 #### Sample CSV Content
 ```csv
-Question,Query-Entity,Answer-Entity
+Question,Source-Entity,Answer-Entity
 "Who is the father of Mary's brother?",Mary,John_Smith
 "What team does the Boston player play for?",Boston_Celtics,NBA
 "Where was the president of France born?",Emmanuel_Macron,Amiens

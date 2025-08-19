@@ -180,7 +180,7 @@ class QuestionBatcher:
             
             # Extract data fields
             questions: List[str] = batch['Question'].tolist()
-            source_ent: np.ndarray = batch["Query-Entity"].to_numpy(dtype=int)
+            source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)
             answers: np.ndarray = batch['Answer-Entity'].to_numpy(dtype=int)
 
             # Generate embeddings via the embedding server
@@ -228,7 +228,7 @@ class QuestionBatcher:
             # Extract batch data
             batch = self.eval_df.iloc[batch_idx]
             questions: List[str] = batch['Question'].tolist()
-            source_ent: np.ndarray = batch["Query-Entity"].to_numpy(dtype=int)
+            source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)
             answers: np.ndarray = batch['Answer-Entity'].to_numpy(dtype=int)
 
             # Generate embeddings via the embedding server
