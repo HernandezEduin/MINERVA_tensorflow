@@ -354,7 +354,6 @@ class EnvNLQ(object):
         self.test_rollouts = test_rollouts
         input_dir = data_input_dir
 
-        # TODO: Improve this so it is shared, might be too heavy having multiple instances
         self.batcher = QuestionBatcher(
             input_dir=input_dir,
             batch_size=self.batch_size,
@@ -368,6 +367,7 @@ class EnvNLQ(object):
         )
 
         self.total_no_examples = self.batcher.get_question_num()
+        self.token_embedding_dim = self.batcher.get_embedding_dim()
 
         # Initialize the knowledge graph
         self.grapher = RelationEntityGrapher(triple_store=os.path.join(input_dir, 'graph.txt'),

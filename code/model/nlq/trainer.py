@@ -393,8 +393,7 @@ class TrainerNLQ(object):
 
         # Tensorflow Placeholders
         # New: external question embedding (e.g., BERT). Dim can be anything; we let dense learn to use it.
-        # TODO: Find a better way to pass the token embedding size
-        self.question_embedding = tf.compat.v1.placeholder(tf.float32, [None, 768], name="question_embedding") # [B*num_rollouts, token_embedding_dim]
+        self.question_embedding = tf.compat.v1.placeholder(tf.float32, [None, self.environment.token_embedding_dim], name="question_embedding") # [B*num_rollouts, token_embedding_dim]
         
         self.range_arr = tf.compat.v1.placeholder(tf.int32, shape=[None, ])                                     # Range array for indexing operations.
         self.global_step = tf.Variable(0, trainable=False)                                                      # Global training step counter
@@ -438,7 +437,6 @@ class TrainerNLQ(object):
         self.train_op = self.bp(self.loss_op)
 
         # Building the test graph
-        # TODO: Check if shape is correct for prev_shape
         self.prev_state = tf.compat.v1.placeholder(tf.float32, self.agent.get_mem_shape(), name="memory_of_agent")  # LSTM Memory Shape (num lstm layers, 2, batch size, memory size)
         self.prev_relation = tf.compat.v1.placeholder(tf.int32, [None, ], name="previous_relation")
         

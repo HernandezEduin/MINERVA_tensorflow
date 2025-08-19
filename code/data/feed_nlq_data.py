@@ -107,6 +107,41 @@ class QuestionBatcher:
         self.pad_id: int = self.question_tokenizer.pad_token_id or 0
         self.cls_id: int = self.question_tokenizer.cls_token_id or 101
         self.sep_id: int = self.question_tokenizer.sep_token_id or 102
+        
+        # Cache embedding dimensions for easy access
+        self._embedding_dim: Optional[int] = None
+        self.calculate_embedding_dimensions()  # Pre-fetch dimensions
+
+    def calculate_embedding_dimensions(self) -> Tuple[int, int]:
+        """
+        Get the embedding dimensions by testing the embedding server.
+
+        Returns:
+            Tuple of (batch_size, embedding_dim) where batch_size is 1 for the test
+        """
+        # Test with a simple question to get dimensions
+        test_question = [[0, 0, 0]]
+        test_embedding = self.embedding_server.embed(
+            token_id_batches=test_question,
+            pad_id=self.pad_id,
+            cls_id=self.cls_id,
+            sep_id=self.sep_id,
+        )
+        # Cache the embedding dimension for future use
+        if self._embedding_dim is None:
+            self._embedding_dim = test_embedding.shape[1]
+        return test_embedding.shape  # Returns (1, embedding_dim)
+
+    def get_embedding_dim(self) -> int:
+        """
+        Get just the embedding dimension (not the batch size).
+
+        Returns:
+            The embedding dimension as an integer
+        """
+        if self._embedding_dim is None:
+            self.calculate_embedding_dimensions()
+        return self._embedding_dim
 
 
     def set_mode(self, mode: str) -> None:
