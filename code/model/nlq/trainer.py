@@ -22,9 +22,9 @@ Classes:
 # TODO: Add more training arguments
 # TODO: Organize the training arguments
 # TODO: Add WANDB Code
-# TODO: Remove input_paths
-# TODO: Remove first_state_of_test
 # TODO: Inspect best saving for checkpoints
+# TODO: Load the model in a separate file to check if everything is working fine
+# TODO: Replace Query-Entity with Source-Entity
 
 from __future__ import absolute_import
 from __future__ import division
@@ -294,7 +294,6 @@ class TrainerNLQ(object):
         # Initialize placeholder lists for episode sequences
         self.candidate_relation_sequence = []
         self.candidate_entity_sequence = []
-        self.input_path = []                                                                                    # TODO: Remove if unused
         self.entity_sequence = []
 
         # Tensorflow Placeholders
@@ -302,7 +301,6 @@ class TrainerNLQ(object):
         # TODO: Find a better way to pass the token embedding size
         self.question_embedding = tf.compat.v1.placeholder(tf.float32, [None, 768], name="question_embedding") # [B*num_rollouts, token_embedding_dim]
         
-        self.first_state_of_test = tf.compat.v1.placeholder(tf.bool, name="is_first_state_of_test")             # TODO: Remove this if unused
         self.range_arr = tf.compat.v1.placeholder(tf.int32, shape=[None, ])                                     # Range array for indexing operations.
         self.global_step = tf.Variable(0, trainable=False)                                                      # Global training step counter
         self.decaying_beta = tf.compat.v1.train.exponential_decay(
@@ -323,10 +321,8 @@ class TrainerNLQ(object):
                                                    name=f"next_relations_{t}")                                  # candidate relations from current entity  [B*num_rollouts,]
             next_ent = tf.compat.v1.placeholder(tf.int32, [None, self.max_num_actions],
                                                      name=f"next_entities_{t}")                                 # candidate entities from current entity [B*num_rollouts,]
-            label_t = tf.compat.v1.placeholder(tf.int32, [None], name=f"input_label_relation_{t}")              # Ground truth action labels for training [B*num_rollouts,]
             cur_ent = tf.compat.v1.placeholder(tf.int32, [None, ], name=f"current_entities_{t}")                # current locations [B*num_rollouts,]
 
-            self.input_path.append(label_t)                                                                     # TODO: Remove if unused
             self.candidate_relation_sequence.append(next_rel)                                                   # list of candidate relations at each step
             self.candidate_entity_sequence.append(next_ent)                                                     # list of candidate entities at each step
             self.entity_sequence.append(cur_ent)                                                                # list of current entities at each step
@@ -510,7 +506,7 @@ class TrainerNLQ(object):
         """
         # create fetches for partial_run_setup
         fetches = self.per_example_loss  + self.action_idx + [self.loss_op] + self.per_example_logits + [self.dummy]
-        feeds =  [self.first_state_of_test] + self.candidate_relation_sequence + self.candidate_entity_sequence + self.input_path + \
+        feeds =  self.candidate_relation_sequence + self.candidate_entity_sequence + \
                 [self.question_embedding] + [self.cum_discounted_reward] + [self.range_arr] + self.entity_sequence
 
 
@@ -518,13 +514,11 @@ class TrainerNLQ(object):
 
         # Pass the memory address of the placeholder to the feed_dict
         # The following placeholders that stay constant through the hops/steps:
-        feed_dict[0][self.first_state_of_test] = False # TODO: Remove this if unused
         feed_dict[0][self.question_embedding] = None
         feed_dict[0][self.range_arr] = np.arange(self.batch_size*self.num_rollouts)
         
         # Configure step-varying placeholders
         for i in range(self.path_length):
-            feed_dict[i][self.input_path[i]] = np.zeros(self.batch_size * self.num_rollouts)  # TODO: Remove this if unused
             feed_dict[i][self.candidate_relation_sequence[i]] = None
             feed_dict[i][self.candidate_entity_sequence[i]] = None
             feed_dict[i][self.entity_sequence[i]] = None
@@ -731,12 +725,9 @@ class TrainerNLQ(object):
             
             feed_dict = {
                 self.range_arr: np.arange(temp_batch_size * self.test_rollouts),
-                self.input_path[0]: np.zeros(temp_batch_size * self.test_rollouts),     # TODO: Remove this if unused
-                self.first_state_of_test: True,                                         # TODO: Remove this if unused
                 self.question_embedding: episode.get_question_embedding(),              # question embeddings
             }
 
-            # TODO: Remove this if it goes unused
             ####logger code####
             if print_paths:
                 self.entity_trajectory = []
