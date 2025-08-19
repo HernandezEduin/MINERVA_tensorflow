@@ -816,28 +816,32 @@ class TrainerNLQ(object):
 
         # Changing the environment to test/dev data and resetting values
         self.environment.change_mode(mode)
-        self.environment.change_test_rollouts(self.test_rollouts)   # modifying the number of rollouts for evaluation
+        # For beam search, limit rollouts to max_num_actions to prevent indexing errors
+        effective_rollouts = min(self.test_rollouts, self.max_num_actions) if beam else self.test_rollouts
+        self.environment.change_test_rollouts(effective_rollouts)   # modifying the number of rollouts for evaluation
         total_examples = self.environment.total_no_examples         # total number of questions
         test_batch_counter = 0
         logger.info(f"Testing with mode: {mode} on {total_examples} samples...")
+        if beam:
+            logger.info(f"Beam search enabled: using {effective_rollouts} rollouts (limited by max_num_actions={self.max_num_actions})")
         for episode in tqdm(self.environment.get_episodes(), desc="Evaluating"):
             assert episode.mode != 'train', "Environment is in training mode!"
 
             temp_batch_size = episode.no_examples                   # batch size, can vary in test due to the last batch
             test_batch_counter += temp_batch_size
-            logger.info(f"Evaluating samples {test_batch_counter}/{total_examples} with {self.test_rollouts} rollouts...")
+            logger.info(f"Evaluating samples {test_batch_counter}/{total_examples} with {effective_rollouts} rollouts...")
 
             # Set Initial Beams Probs
-            beam_probs = np.zeros((temp_batch_size * self.test_rollouts, 1)) # Cumulative scores from previous steps [batch_size*k, 1]
+            beam_probs = np.zeros((temp_batch_size * effective_rollouts, 1)) # Cumulative scores from previous steps [batch_size*k, 1]
 
             # Provide Initial Variables
             state = episode.get_state()                             # Initial State (current_entities, next_entities, next_relations)
             mem = self.agent.get_mem_shape()                        # LSTM Memory Shape (num lstm layers, 2, batch size, memory size)
-            agent_mem = np.zeros((mem[0], mem[1], temp_batch_size*self.test_rollouts, mem[3]), dtype='float32')
-            previous_relation = np.ones((temp_batch_size * self.test_rollouts, ), dtype='int64') * self.relation_vocab['DUMMY_START_RELATION']
+            agent_mem = np.zeros((mem[0], mem[1], temp_batch_size*effective_rollouts, mem[3]), dtype='float32')
+            previous_relation = np.ones((temp_batch_size * effective_rollouts, ), dtype='int64') * self.relation_vocab['DUMMY_START_RELATION']
             
             feed_dict = {
-                self.range_arr: np.arange(temp_batch_size * self.test_rollouts),
+                self.range_arr: np.arange(temp_batch_size * effective_rollouts),
                 self.question_embedding: episode.get_question_embedding(),              # question embeddings
             }
 
@@ -874,7 +878,7 @@ class TrainerNLQ(object):
                     # Instead of greedily selecting the single best action at each step, 
                     # beam search maintains multiple promising paths simultaneously 
                     # to find better reasoning chains.
-                    k = self.test_rollouts                  # Beam size (number of paths to maintain)
+                    k = effective_rollouts  # Use the same effective rollouts calculated earlier
                     new_scores = test_scores + beam_probs   # Combine current action scores with cumulative beam scores [batch_size*k, max_actions]
                     if i == 0:                              # At step 0, all beams start from the same state, so we need to select diverse starting paths.
                         idx = np.argsort(new_scores)        # Sort all scores
