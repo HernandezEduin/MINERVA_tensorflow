@@ -18,7 +18,6 @@ Key components:
 Classes:
     TrainerNLQ: Main trainer class for MINERVA NLQ reasoning
 """
-# TODO: Remove params and instead use variables to not obsfuscate the code
 # TODO: Add WANDB Code
 # TODO: Inspect best saving for checkpoints
 # TODO: Load the model in a separate file to check if everything is working fine
@@ -87,7 +86,20 @@ class TrainerNLQ(object):
         save_path (Optional[str]): Path to saved model checkpoint
         
     Example:
-        >>> trainer = TrainerNLQ(params, entity_vocab, relation_vocab, embedding_server)
+        >>> trainer = TrainerNLQ(
+        ...     batch_size=128, num_rollouts=20, positive_reward=1.0, negative_reward=0.0,
+        ...     path_length=3, test_rollouts=100, data_input_dir="./data",
+        ...     question_tokenizer_name="bert-base-uncased", cached_QAMetaData_path="./cache",
+        ...     raw_QAData_path="./raw", max_num_actions=200, embedding_size=50,
+        ...     hidden_size=50, use_entity_embeddings=False, train_entity_embeddings=False,
+        ...     train_relation_embeddings=True, LSTM_layers=1, learning_rate=1e-3,
+        ...     grad_clip_norm=5, gamma=1.0, Lambda=0.0, beta=1e-2, total_iterations=2000,
+        ...     eval_every=100, output_dir="./output", model_dir="./models",
+        ...     path_logger_file="./logs", pretrained_embeddings_action="",
+        ...     pretrained_embeddings_entity="", pretrained_question_projector="",
+        ...     pool="max", seed=42, entity_vocab=entity_vocab, relation_vocab=relation_vocab,
+        ...     embedding_server=embedding_server
+        ... )
         >>> trainer.initialize(sess)
         >>> trainer.train(sess)
         >>> hits1, hits3, hits5, hits10, hits20 = trainer.test(sess, beam=True)
@@ -95,7 +107,38 @@ class TrainerNLQ(object):
 
     def __init__(
         self,
-        params: Dict[str, Any],
+        batch_size: int,
+        num_rollouts: int,
+        positive_reward: float,
+        negative_reward: float,
+        path_length: int,
+        test_rollouts: int,
+        data_input_dir: str,
+        question_tokenizer_name: str,
+        cached_QAMetaData_path: str,
+        raw_QAData_path: str,
+        max_num_actions: int,
+        embedding_size: int,
+        hidden_size: int,
+        use_entity_embeddings: bool,
+        train_entity_embeddings: bool,
+        train_relation_embeddings: bool,
+        LSTM_layers: int,
+        learning_rate: float,
+        grad_clip_norm: int,
+        gamma: float,
+        Lambda: float,
+        beta: float,
+        total_iterations: int,
+        eval_every: int,
+        output_dir: str,
+        model_dir: str,
+        path_logger_file: str,
+        pretrained_embeddings_action: str,
+        pretrained_embeddings_entity: str,
+        pretrained_question_projector: str,
+        pool: str,
+        seed: int,
         entity_vocab: Dict[str, int],
         relation_vocab: Dict[str, int],
         embedding_server: Optional[EmbeddingServer] = None
@@ -109,46 +152,101 @@ class TrainerNLQ(object):
         reasoning tasks.
         
         Args:
-            params: Comprehensive configuration dictionary containing:
-                - Agent parameters: embedding_size, hidden_size, LSTM_layers, etc.
-                - Training parameters: learning_rate, batch_size, total_iterations
-                - Environment parameters: path_length, num_rollouts, test_rollouts
-                - Evaluation parameters: test_rollouts, eval_every, beam settings
-                - Data parameters: vocab_dir, data_input_dir, output_dir paths
-                - Optimization parameters: grad_clip_norm, gamma, Lambda, beta
+            batch_size: Number of questions processed in each training batch
+            num_rollouts: Number of training rollouts per question
+            positive_reward: Reward for correct answers
+            negative_reward: Reward for incorrect answers
+            path_length: Maximum reasoning steps allowed
+            test_rollouts: Number of evaluation rollouts per question
+            data_input_dir: Directory containing knowledge graph data files
+            question_tokenizer_name: Tokenizer name for question embeddings
+            cached_QAMetaData_path: Path to cached tokenized QA metadata JSON file
+            raw_QAData_path: Path to the raw QA CSV dataset
+            max_num_actions: Maximum number of relations/actions per entity
+            embedding_size: Embedding dimension for entities and relations
+            hidden_size: Hidden state size for LSTM layers
+            use_entity_embeddings: Whether to use entity embeddings
+            train_entity_embeddings: Whether to fine-tune entity embeddings
+            train_relation_embeddings: Whether to train relation embeddings
+            LSTM_layers: Number of LSTM layers in the agent network
+            learning_rate: Learning rate for the optimizer
+            grad_clip_norm: Maximum gradient norm for gradient clipping
+            gamma: Discount factor for future rewards in RL
+            Lambda: Baseline regularization parameter
+            beta: Entropy regularization coefficient for exploration
+            total_iterations: Total number of training iterations
+            eval_every: Frequency of evaluation (every N training iterations)
+            output_dir: Base directory for all output files and logs
+            model_dir: Directory to save trained model checkpoints
+            path_logger_file: Path for logging reasoning trajectories
+            pretrained_embeddings_action: Path to pretrained relation embeddings
+            pretrained_embeddings_entity: Path to pretrained entity embeddings
+            pretrained_question_projector: Path to pretrained question projector
+            pool: Pooling method for evaluation of rollouts ('max', 'sum')
+            seed: Random seed for reproducibility
             entity_vocab: Entity name to integer ID mapping for embedding lookup
             relation_vocab: Relation name to integer ID mapping for embedding lookup  
             embedding_server: Optional service for generating question embeddings
                              from natural language text using pre-trained models
                              
         Note:
-            - Transfers all parameters to instance attributes for easy access
+            - Stores all parameters as instance attributes for easy access
             - Creates shared environment to save memory across train/dev/test modes
             - Disables TensorFlow eager execution for graph-based training
             - Sets up vocabulary mappings and special token IDs (PAD tokens)
         """
 
-        # transfer parameters to self
-        for key, val in params.items(): 
-            setattr(self, key, val)
+        # Store all parameters as instance attributes
+        self.batch_size = batch_size
+        self.num_rollouts = num_rollouts
+        self.positive_reward = positive_reward
+        self.negative_reward = negative_reward
+        self.path_length = path_length
+        self.test_rollouts = test_rollouts
+        self.data_input_dir = data_input_dir
+        self.question_tokenizer_name = question_tokenizer_name
+        self.cached_QAMetaData_path = cached_QAMetaData_path
+        self.raw_QAData_path = raw_QAData_path
+        self.max_num_actions = max_num_actions
+        self.embedding_size = embedding_size
+        self.hidden_size = hidden_size
+        self.use_entity_embeddings = use_entity_embeddings
+        self.train_entity_embeddings = train_entity_embeddings
+        self.train_relation_embeddings = train_relation_embeddings
+        self.LSTM_layers = LSTM_layers
+        self.learning_rate = learning_rate
+        self.grad_clip_norm = grad_clip_norm
+        self.gamma = gamma
+        self.Lambda = Lambda
+        self.beta = beta
+        self.total_iterations = total_iterations
+        self.eval_every = eval_every
+        self.output_dir = output_dir
+        self.model_dir = model_dir
+        self.path_logger_file = path_logger_file
+        self.pretrained_embeddings_action = pretrained_embeddings_action
+        self.pretrained_embeddings_entity = pretrained_embeddings_entity
+        self.pretrained_question_projector = pretrained_question_projector
+        self.pool = pool
+        self.seed = seed
 
         # shared environment accross modes, save space with graph builder and textual embeddings
         self.environment = EnvNLQ(
-            batch_size=params['batch_size'],
-            num_rollouts=params['num_rollouts'],
-            positive_reward=params['positive_reward'],
-            negative_reward=params['negative_reward'],
-            path_length=params['path_length'],
-            test_rollouts=params['test_rollouts'],
-            data_input_dir=params['data_input_dir'],
-            question_tokenizer_name=params['question_tokenizer_name'],
-            cached_QAMetaData_path=params['cached_QAMetaData_path'],
-            raw_QAData_path=params['raw_QAData_path'],
-            max_num_actions=params['max_num_actions'],
+            batch_size=batch_size,
+            num_rollouts=num_rollouts,
+            positive_reward=positive_reward,
+            negative_reward=negative_reward,
+            path_length=path_length,
+            test_rollouts=test_rollouts,
+            data_input_dir=data_input_dir,
+            question_tokenizer_name=question_tokenizer_name,
+            cached_QAMetaData_path=cached_QAMetaData_path,
+            raw_QAData_path=raw_QAData_path,
+            max_num_actions=max_num_actions,
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab, 
             mode='train',
-            seed=params['seed'],
+            seed=seed,
             embedding_server=embedding_server
         )
         
@@ -157,15 +255,15 @@ class TrainerNLQ(object):
         tf.compat.v1.disable_eager_execution()
 
         self.agent = AgentNLQ(
-            embedding_size=params['embedding_size'],
-            hidden_size=params['hidden_size'],
-            use_entity_embeddings=params['use_entity_embeddings'],
-            train_entity_embeddings=params['train_entity_embeddings'],
-            train_relation_embeddings=params['train_relation_embeddings'],
-            num_rollouts=params['num_rollouts'],
-            test_rollouts=params['test_rollouts'],
-            LSTM_layers=params['LSTM_layers'],
-            batch_size=params['batch_size'],
+            embedding_size=embedding_size,
+            hidden_size=hidden_size,
+            use_entity_embeddings=use_entity_embeddings,
+            train_entity_embeddings=train_entity_embeddings,
+            train_relation_embeddings=train_relation_embeddings,
+            num_rollouts=num_rollouts,
+            test_rollouts=test_rollouts,
+            LSTM_layers=LSTM_layers,
+            batch_size=batch_size,
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab
         )
@@ -1030,7 +1128,38 @@ if __name__ == '__main__':
     # Training phase
     if not options['load_model']:
         trainer = TrainerNLQ(
-            options, 
+            batch_size=options['batch_size'],
+            num_rollouts=options['num_rollouts'],
+            positive_reward=options['positive_reward'],
+            negative_reward=options['negative_reward'],
+            path_length=options['path_length'],
+            test_rollouts=options['test_rollouts'],
+            data_input_dir=options['data_input_dir'],
+            question_tokenizer_name=options['question_tokenizer_name'],
+            cached_QAMetaData_path=options['cached_QAMetaData_path'],
+            raw_QAData_path=options['raw_QAData_path'],
+            max_num_actions=options['max_num_actions'],
+            embedding_size=options['embedding_size'],
+            hidden_size=options['hidden_size'],
+            use_entity_embeddings=options['use_entity_embeddings'],
+            train_entity_embeddings=options['train_entity_embeddings'],
+            train_relation_embeddings=options['train_relation_embeddings'],
+            LSTM_layers=options['LSTM_layers'],
+            learning_rate=options['learning_rate'],
+            grad_clip_norm=options['grad_clip_norm'],
+            gamma=options['gamma'],
+            Lambda=options['Lambda'],
+            beta=options['beta'],
+            total_iterations=options['total_iterations'],
+            eval_every=options['eval_every'],
+            output_dir=options['output_dir'],
+            model_dir=options['model_dir'],
+            path_logger_file=options['path_logger_file'],
+            pretrained_embeddings_action=options['pretrained_embeddings_action'],
+            pretrained_embeddings_entity=options['pretrained_embeddings_entity'],
+            pretrained_question_projector=options['pretrained_question_projector'],
+            pool=options['pool'],
+            seed=options['seed'],
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab, 
             embedding_server=embedding_server
@@ -1058,7 +1187,38 @@ if __name__ == '__main__':
 
     # Evaluation phase
     trainer = TrainerNLQ(
-        options, 
+        batch_size=options['batch_size'],
+        num_rollouts=options['num_rollouts'],
+        positive_reward=options['positive_reward'],
+        negative_reward=options['negative_reward'],
+        path_length=options['path_length'],
+        test_rollouts=options['test_rollouts'],
+        data_input_dir=options['data_input_dir'],
+        question_tokenizer_name=options['question_tokenizer_name'],
+        cached_QAMetaData_path=options['cached_QAMetaData_path'],
+        raw_QAData_path=options['raw_QAData_path'],
+        max_num_actions=options['max_num_actions'],
+        embedding_size=options['embedding_size'],
+        hidden_size=options['hidden_size'],
+        use_entity_embeddings=options['use_entity_embeddings'],
+        train_entity_embeddings=options['train_entity_embeddings'],
+        train_relation_embeddings=options['train_relation_embeddings'],
+        LSTM_layers=options['LSTM_layers'],
+        learning_rate=options['learning_rate'],
+        grad_clip_norm=options['grad_clip_norm'],
+        gamma=options['gamma'],
+        Lambda=options['Lambda'],
+        beta=options['beta'],
+        total_iterations=options['total_iterations'],
+        eval_every=options['eval_every'],
+        output_dir=options['output_dir'],
+        model_dir=options['model_dir'],
+        path_logger_file=options['path_logger_file'],
+        pretrained_embeddings_action=options['pretrained_embeddings_action'],
+        pretrained_embeddings_entity=options['pretrained_embeddings_entity'],
+        pretrained_question_projector=options['pretrained_question_projector'],
+        pool=options['pool'],
+        seed=options['seed'],
         entity_vocab=entity_vocab, 
         relation_vocab=relation_vocab, 
         embedding_server=embedding_server
