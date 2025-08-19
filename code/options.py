@@ -104,10 +104,8 @@ def read_options_nlq():
     # Dataset and Data Processing
     parser.add_argument("--data_input_dir", default="", type=str,
                         help="Directory containing knowledge graph data files")
-    # TODO: Inspect if used
-    parser.add_argument("--input_file", default="train.txt", type=str,
-                        help="Training data file within data_input_dir")
-    # TODO: Inspect if used
+
+    # TODO: Add an option to generate the vocab for the user. This argument is currently unused.
     parser.add_argument("--create_vocab", default=0, type=int,
                         help="Whether to create vocabulary files (1) or use existing (0)")
     parser.add_argument("--vocab_dir", default="", type=str,
@@ -160,26 +158,18 @@ def read_options_nlq():
                         help="Reward value when agent reaches the correct answer entity")
     parser.add_argument("--negative_reward", default=0, type=float,
                         help="Reward value when agent doesn't reach the correct answer")
-    # TODO: Inspect if used
     parser.add_argument("--gamma", default=1, type=float,
                         help="Discount factor for future rewards in RL (typically 0.9-1.0)")
     
     # Training Configuration
     parser.add_argument("--batch_size", default=128, type=int,
                         help="Number of questions processed in each training batch")
-    # TODO: Inspect if Used
     parser.add_argument("--learning_rate", default=1e-3, type=float,
-                        help="Learning rate for the optimizer (Adam)")
-    # TODO: Inspect if Used
+                        help="Learning rate for the optimizer (Adam) and baseline regularization.")
     parser.add_argument("--grad_clip_norm", default=5, type=int,
                         help="Maximum gradient norm for gradient clipping (prevents explosion)")
-    # TODO: Inspect if Used
-    parser.add_argument("--l2_reg_const", default=1e-2, type=float,
-                        help="L2 regularization constant to prevent overfitting")
-    # TODO: Inspect if Used
     parser.add_argument("--beta", default=1e-2, type=float,
                         help="Entropy regularization coefficient for exploration")
-    # TODO: Inspect if Used
     parser.add_argument("--Lambda", default=0.0, type=float,
                         help="Baseline regularization parameter")
     parser.add_argument("--total_iterations", default=2000, type=int,
@@ -192,18 +182,15 @@ def read_options_nlq():
                         help="Directory to save trained model checkpoints")
     parser.add_argument("--model_load_dir", default="", type=str,
                         help="Directory to load pre-trained model from")
+    # TODO: Replace with str2bool
     parser.add_argument("--load_model", default=0, type=int,
                         help="Whether to load a pre-trained model (1) or train from scratch (0)")
     parser.add_argument("--base_output_dir", default="", type=str,
                         help="Base directory for all output files and logs")
     
-    # Logging and Output
-    parser.add_argument("--log_dir", default="./logs/", type=str,
-                        help="Directory for log files")
+    # Logging
     parser.add_argument("--log_file_name", default="reward.txt", type=str,
                         help="Name of the main log file")
-    parser.add_argument("--output_file", default="", type=str,
-                        help="Path for additional output files")
     
     # Miscellaneous
     parser.add_argument("--seed", type=int, default=42,
@@ -213,7 +200,6 @@ def read_options_nlq():
         parsed = vars(parser.parse_args())
     except IOError as msg:
         parser.error(str(msg))
-    parsed['input_files'] = [parsed['data_input_dir'] + '/' + parsed['input_file']]
 
     parsed['use_entity_embeddings'] = (parsed['use_entity_embeddings'] == 1)
     parsed['train_entity_embeddings'] = (parsed['train_entity_embeddings'] == 1)
