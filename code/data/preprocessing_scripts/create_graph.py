@@ -2,6 +2,7 @@ import os
 import csv
 import argparse
 
+import re
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Create a graph for the dataset")
@@ -30,11 +31,10 @@ if __name__ == '__main__':
     triplets = []
     for f in graphs:
         with open(os.path.join(dir, f)) as raw_file:
-            csv_file = csv.reader(raw_file, delimiter='\t')
-            for line in csv_file:
-                e1,r,e2 = line
-                triplets.append((e1,r,e2))
-                triplets.append((e2,'_'+r,e1))  # add reverse triplet
+            for line in raw_file:
+                e1, r, e2 = re.split(r'\s+', line.strip())
+                triplets.append((e1, r, e2))
+                triplets.append((e2, '_' + r, e1))  # add reverse triplet
 
     output_file = os.path.join(dir, 'full_graph.txt' if args.full_graph else 'graph.txt')
 

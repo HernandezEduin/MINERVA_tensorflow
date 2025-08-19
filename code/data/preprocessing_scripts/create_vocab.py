@@ -3,6 +3,8 @@ import csv
 import argparse
 import os
 
+import re
+
 def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Create a graph for the dataset")
     parser.add_argument("--dataset", type=str, default="kinshiphinton",
@@ -44,9 +46,8 @@ if __name__ == '__main__':
 
     for f in files:
         with open(os.path.join(dir, f)) as raw_file:
-            csv_file = csv.reader(raw_file, delimiter='\t')
-            for line in csv_file:
-                e1,r,e2 = line
+            for line in raw_file:
+                e1, r, e2 = re.split(r'\s+', line.strip())
                 if e1 not in entity_vocab:
                     entity_vocab[e1] = entity_counter
                     entity_counter += 1
@@ -59,10 +60,10 @@ if __name__ == '__main__':
 
 
     with open(os.path.join(vocab_dir, 'entity_vocab.json'), 'w') as fout:
-        json.dump(entity_vocab, fout)
+        json.dump(entity_vocab, fout, indent=4)
 
     with open(os.path.join(vocab_dir, 'relation_vocab.json'), 'w') as fout:
-        json.dump(relation_vocab, fout)
+        json.dump(relation_vocab, fout, indent=4)
 
     print(f"Entity vocab size: {len(entity_vocab)}")
     print(f"Relation vocab size: {len(relation_vocab)}")
