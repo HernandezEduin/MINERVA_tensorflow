@@ -399,11 +399,21 @@ def load_dictionary(data_dir: str) -> Tuple[Dict[str, int], Dict[str, int], Dict
     ent2id = load_json(os.path.join(data_dir, "vocab/entity_vocab.json"))
     rel2id = load_json(os.path.join(data_dir, "vocab/relation_vocab.json"))
 
+    if os.path.exists(os.path.join(data_dir, "vocab/entity_title.json")):
+        ent2name = load_json(os.path.join(data_dir, "vocab/entity_title.json"))
+    else:
+        ent2name = {}
+
+    if os.path.exists(os.path.join(data_dir, "vocab/relation_title.json")):
+        rel2name = load_json(os.path.join(data_dir, "vocab/relation_title.json"))
+    else:
+        rel2name = {}
+
     # Create reverse mappings for efficient ID->name lookup
     id2ent = {v: k for k, v in ent2id.items()}
     id2rel = {v: k for k, v in rel2id.items()}
 
-    return ent2id, rel2id, id2ent, id2rel
+    return ent2id, rel2id, id2ent, id2rel, ent2name, rel2name
 
 def ids_to_embeddings_tf(
     token_id_batches: List[List[int]],

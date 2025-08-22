@@ -30,6 +30,8 @@ class QuestionBatcher:
         relation_vocab (Dict[str, int]): Relation name to ID mapping
         rev_entity_vocab (Dict[int, str]): Entity ID to name mapping
         rev_relation_vocab (Dict[int, str]): Relation ID to name mapping
+        ent2name (Dict[str, str]): Entity name to human-readable title mapping
+        rel2name (Dict[str, str]): Relation name to human-readable title mapping
         train_df (pd.DataFrame): Training dataset
         dev_df (pd.DataFrame): Development/validation dataset
         test_df (pd.DataFrame): Test dataset
@@ -71,11 +73,13 @@ class QuestionBatcher:
         self.batch_size: int = batch_size
 
         # Load knowledge graph vocabularies
-        ent2id, rel2id, id2ent, id2rel = load_dictionary(input_dir)
+        ent2id, rel2id, id2ent, id2rel, ent2name, rel2name = load_dictionary(input_dir)
         self.entity_vocab: Dict[str, int] = ent2id
         self.relation_vocab: Dict[str, int] = rel2id
         self.rev_entity_vocab: Dict[int, str] = id2ent
         self.rev_relation_vocab: Dict[int, str] = id2rel
+        self.ent2name: Dict[str, str] = ent2name
+        self.rel2name: Dict[str, str] = rel2name
 
         # Load and preprocess QA datasets
         self.train_df: pd.DataFrame
@@ -287,7 +291,10 @@ class QuestionBatcher:
         Returns:
             List of entity names corresponding to the input IDs
         """
-        return [self.rev_entity_vocab.get(eid, "Unknown") for eid in entity_ids]
+        if self.ent2name:
+            return [self.ent2name.get(self.rev_entity_vocab.get(eid, "Unknown"), "Unknown") for eid in entity_ids]
+        else:
+            return [self.rev_entity_vocab.get(eid, "Unknown") for eid in entity_ids]
 
     def translate_relations(self, relation_ids: np.ndarray) -> List[str]:
         """
@@ -299,7 +306,10 @@ class QuestionBatcher:
         Returns:
             List of relation names corresponding to the input IDs
         """
-        return [self.rev_relation_vocab.get(rid, "Unknown") for rid in relation_ids]
+        if self.rel2name:
+            return [self.rel2name.get(self.rev_relation_vocab.get(rid, "Unknown"), "Unknown") for rid in relation_ids]
+        else:
+            return [self.rev_relation_vocab.get(rid, "Unknown") for rid in relation_ids]
 
     def translate_questions(self, questions: Union[List[List[int]], List[str]]) -> List[str]:
         """

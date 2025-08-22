@@ -955,9 +955,9 @@ class TrainerNLQ(object):
                 if print_paths:
                     # Retrive Sample's context
                     question_txt = self.environment.batcher.translate_questions([episode.question_tokens[b]])[0]    # Convert question back to text
-                    start_e = self.rev_entity_vocab[episode.start_entities[b * self.test_rollouts]]                 # Map id to entity for source node
-                    end_e = self.rev_entity_vocab[episode.end_entities[b * self.test_rollouts]]                     # Map id to entity for answer node
-                    
+                    start_e = self.environment.batcher.translate_entities([episode.start_entities[b * self.test_rollouts]])                 # Map id to entity for source node
+                    end_e = self.environment.batcher.translate_entities([episode.end_entities[b * self.test_rollouts]])                     # Map id to entity for answer node
+
                     # Question Header Information
                     paths[question_txt].append(str(start_e) + "\t" + str(end_e) + "\n")
                     paths[question_txt].append("Reward:" + str(1 if answer_pos != None and answer_pos < 10 else 0) + "\n") # Answered correctly if top10
@@ -969,13 +969,13 @@ class TrainerNLQ(object):
                             rev = -1                                # This path failed
 
                         # Answer Summary (StartEntity, EndEntity, PathScore)
-                        answers.append(self.rev_entity_vocab[se[b,r]]+'\t'+ self.rev_entity_vocab[ce[b,r]]+'\t'+ str(self.log_probs[b,r])+'\n')
+                        answers.append(self.environment.batcher.translate_entities([se[b,r]])[0]+'\t'+ self.environment.batcher.translate_entities([ce[b,r]])[0]+'\t'+ str(self.log_probs[b,r])+'\n')
 
                         # Detailed Path Trajectory (entities sequence, relation sequence, success indicator, path score)
                         paths[question_txt].append(
-                            '\t'.join([str(self.rev_entity_vocab[e[indx]]) for e in
+                            '\t'.join([str(self.environment.batcher.translate_entities([e[indx]])) for e in
                                        self.entity_trajectory]) + '\n' + '\t'.join(
-                                [str(self.rev_relation_vocab[re[indx]]) for re in self.relation_trajectory]) + '\n' + str(
+                                [str(self.environment.batcher.translate_relations([re[indx]])) for re in self.relation_trajectory]) + '\n' + str(
                                 rev) + '\n' + str(
                                 self.log_probs[b, r]) + '\n___' + '\n')
 
