@@ -96,8 +96,7 @@ class TrainerNLQ(object):
         ...     train_relation_embeddings=True, LSTM_layers=1, learning_rate=1e-3,
         ...     grad_clip_norm=5, gamma=1.0, Lambda=0.0, beta=1e-2, total_iterations=2000,
         ...     eval_every=100, output_dir="./output", model_dir="./models",
-        ...     path_logger_file="./logs", pretrained_embeddings_action="",
-        ...     pretrained_embeddings_entity="", pretrained_question_projector="",
+        ...     path_logger_file="./logs", 
         ...     pool="max", seed=42, entity_vocab=entity_vocab, relation_vocab=relation_vocab,
         ...     embedding_server=embedding_server
         ... )
@@ -135,9 +134,6 @@ class TrainerNLQ(object):
         output_dir: str,
         model_dir: str,
         path_logger_file: str,
-        pretrained_embeddings_action: str,
-        pretrained_embeddings_entity: str,
-        pretrained_question_projector: str,
         pool: str,
         seed: int,
         entity_vocab: Dict[str, int],
@@ -182,9 +178,6 @@ class TrainerNLQ(object):
             output_dir: Base directory for all output files and logs
             model_dir: Directory to save trained model checkpoints
             path_logger_file: Path for logging reasoning trajectories
-            pretrained_embeddings_action: Path to pretrained relation embeddings
-            pretrained_embeddings_entity: Path to pretrained entity embeddings
-            pretrained_question_projector: Path to pretrained question projector
             pool: Pooling method for evaluation of rollouts ('max', 'sum')
             seed: Random seed for reproducibility
             entity_vocab: Entity name to integer ID mapping for embedding lookup
@@ -228,9 +221,6 @@ class TrainerNLQ(object):
         self.output_dir = output_dir
         self.model_dir = model_dir
         self.path_logger_file = path_logger_file
-        self.pretrained_embeddings_action = pretrained_embeddings_action
-        self.pretrained_embeddings_entity = pretrained_embeddings_entity
-        self.pretrained_question_projector = pretrained_question_projector
         self.pool = pool
         self.use_beam = use_beam
         self.seed = seed
@@ -478,44 +468,6 @@ class TrainerNLQ(object):
         else:
             return self.model_saver.restore(sess, restore)
 
-
-
-    def initialize_pretrained_embeddings(self, sess: tf.compat.v1.Session) -> None:
-        # TODO: Inspect if this is actually used, cause the pretrained paths are kept empty
-        """
-        Load and initialize pretrained embeddings for entities, relations, and question projector.
-        
-        Loads pretrained embedding matrices from files and initializes the corresponding
-        lookup tables in the agent. This can significantly improve training speed and
-        final performance by starting with meaningful representations instead of
-        random initializations.
-        
-        Args:
-            sess: Active TensorFlow session for running initialization operations.
-            
-        Note:
-            - Checks configuration for pretrained embedding file paths
-            - Loads embeddings using numpy for entity and relation tables
-            - Initializes question projector weights if available and variables exist
-            - Skips initialization if files are not specified or variables not created
-            - Warns if question projector variables haven't been created yet
-        """
-        if self.pretrained_embeddings_action != '':
-            embeddings = np.loadtxt(open(self.pretrained_embeddings_action))
-            _ = sess.run((self.agent.relation_embedding_init),
-                         feed_dict={self.agent.action_embedding_placeholder: embeddings})
-        if self.pretrained_embeddings_entity != '':
-            embeddings = np.loadtxt(open(self.pretrained_embeddings_entity))
-            _ = sess.run((self.agent.entity_embedding_init),
-                         feed_dict={self.agent.entity_embedding_placeholder: embeddings})
-        if self.pretrained_question_projector != '':
-            embeddings = np.loadtxt(open(self.pretrained_question_projector))
-            # Make sure the agent's question_proj has been called at least once to create variables
-            if self.agent.question_proj_init is not None:
-                _ = sess.run(self.agent.question_proj_init,
-                            feed_dict={self.agent.question_embedding_placeholder: embeddings})
-            else:
-                logger.warning("Question projector variables not yet created. Skipping pretrained initialization.")
 
     def bp(self, cost: tf.Tensor) -> tf.Operation:
         """
@@ -1215,9 +1167,6 @@ if __name__ == '__main__':
             output_dir=options['output_dir'],
             model_dir=options['model_dir'],
             path_logger_file=options['path_logger_file'],
-            pretrained_embeddings_action=options['pretrained_embeddings_action'],
-            pretrained_embeddings_entity=options['pretrained_embeddings_entity'],
-            pretrained_question_projector=options['pretrained_question_projector'],
             pool=options['pool'],
             use_beam=options['use_beam'],
             seed=options['seed'],
@@ -1230,7 +1179,6 @@ if __name__ == '__main__':
             # Set seeds again after session creation to ensure TF operations are deterministic
             set_seeds(options['seed'])
             sess.run(trainer.initialize())
-            trainer.initialize_pretrained_embeddings(sess=sess)
 
             trainer.train(sess)
             save_path = trainer.save_path
@@ -1276,9 +1224,6 @@ if __name__ == '__main__':
         output_dir=options['output_dir'],
         model_dir=options['model_dir'],
         path_logger_file=options['path_logger_file'],
-        pretrained_embeddings_action=options['pretrained_embeddings_action'],
-        pretrained_embeddings_entity=options['pretrained_embeddings_entity'],
-        pretrained_question_projector=options['pretrained_question_projector'],
         pool=options['pool'],
         use_beam=options['use_beam'],
         seed=options['seed'],

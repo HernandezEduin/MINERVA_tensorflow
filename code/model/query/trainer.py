@@ -227,27 +227,6 @@ class Trainer(object):
             return  self.model_saver.restore(sess, restore)
 
 
-
-    def initialize_pretrained_embeddings(self, sess: tf.compat.v1.Session) -> None:
-        """
-        Load and initialize pretrained embeddings for entities and relations.
-        
-        If pretrained embedding files are specified in the configuration,
-        loads them and initializes the corresponding embedding lookup tables.
-        This can significantly improve training speed and final performance.
-        
-        Args:
-            sess (tf.Session): TensorFlow session for running initialization ops.
-        """
-        if self.pretrained_embeddings_action != '':
-            embeddings = np.loadtxt(open(self.pretrained_embeddings_action))
-            _ = sess.run((self.agent.relation_embedding_init),
-                         feed_dict={self.agent.action_embedding_placeholder: embeddings})
-        if self.pretrained_embeddings_entity != '':
-            embeddings = np.loadtxt(open(self.pretrained_embeddings_entity))
-            _ = sess.run((self.agent.entity_embedding_init),
-                         feed_dict={self.agent.entity_embedding_placeholder: embeddings})
-
     def bp(self, cost: tf.Tensor) -> tf.Operation:
         """
         Set up backpropagation with baseline update and gradient clipping.
@@ -752,7 +731,6 @@ if __name__ == '__main__':
             # Set seeds again after session creation to ensure TF operations are deterministic
             set_seeds(options['seed'])
             sess.run(trainer.initialize())
-            trainer.initialize_pretrained_embeddings(sess=sess)
 
             trainer.train(sess)
             save_path = trainer.save_path

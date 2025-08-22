@@ -151,11 +151,6 @@ def read_options() -> Dict[str, Any]:
     except IOError as msg:
         parser.error(str(msg))
 
-    # TODO: Remove these 3 arguments, as it never gets a new assignment and goes unused
-    parsed['pretrained_embeddings_action'] = ""
-    parsed['pretrained_embeddings_entity'] = ""
-    parsed['pretrained_question_projector'] = ""
-
     if parsed['timestamp'] is None:
         local_time = time.localtime()
         parsed['timestamp'] = time.strftime("%Y%m%d_%H%M%S", local_time)
