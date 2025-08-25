@@ -226,11 +226,20 @@ def process_and_cache_triviaqa_data(
     new_df = new_df.sample(frac=1, random_state=seed).reset_index(drop=True)  # Shuffle data with fixed seed
 
     # Create train/dev/test splits
+    dev_splitted = False
     if (override_split and 'SplitLabel' in new_df.columns and 
         new_df['SplitLabel'].notna().any() and not new_df['SplitLabel'].eq('').all()):
         # Use predefined split labels
         train_df = new_df[new_df['SplitLabel'] == 'train'].reset_index(drop=True)
-        test_df = new_df[new_df['SplitLabel'] != 'train'].reset_index(drop=True)
+
+        if 'test' in new_df["SplitLabel"].values and 'dev' in new_df["SplitLabel"].values:
+            test_df = new_df[new_df['SplitLabel'] == 'test'].reset_index(drop=True)
+            dev_df = new_df[new_df['SplitLabel'] == 'dev'].reset_index(drop=True)
+            dev_splitted = True
+            if logger: logger.info("Using SplitLabel column for dev/test splitting")
+        else:
+            test_df = new_df[new_df['SplitLabel'] != 'train'].reset_index(drop=True)
+
         if logger: 
             logger.info("Using SplitLabel column for data splitting")
     else:
@@ -243,9 +252,10 @@ def process_and_cache_triviaqa_data(
         dev_df = test_df
         if logger: 
             logger.warning("Test set too small (<100 samples), using as dev set")
-    else:
-        # Split test set into dev and test
+    elif not dev_splitted:
+        # Automatic splitting
         dev_df, test_df = train_test_split(test_df, test_size=0.5, random_state=seed)
+        if logger: logger.info("Automatically splitting test set into dev/test")
 
     # Validate DataFrame creation
     if not all(isinstance(df, pd.DataFrame) for df in [train_df, dev_df, test_df]):
@@ -367,17 +377,19 @@ def load_qa_data(
 
     return train_df, dev_df, test_df, train_metadata
 
-def load_dictionary(data_dir: str) -> Tuple[Dict[str, int], Dict[str, int], Dict[int, str], Dict[int, str]]:
+def load_dictionary(data_dir: str) -> Tuple[Dict[str, int], Dict[str, int], Dict[int, str], Dict[int, str], Dict[str, str], Dict[str, str]]:
     """
-    Load entity and relation vocabularies from JSON files.
+    Load entity and relation vocabularies with optional title mappings from JSON files.
     
     Loads the entity and relation vocabularies from the standard MINERVA
     directory structure and creates both forward (name->ID) and reverse 
-    (ID->name) mappings for efficient lookup operations.
+    (ID->name) mappings for efficient lookup operations. Additionally loads
+    optional entity and relation title mappings if available.
     
     Args:
         data_dir: Directory containing the vocab subdirectory with JSON files
-                 Expected files: vocab/entity_vocab.json, vocab/relation_vocab.json
+                 Required files: vocab/entity_vocab.json, vocab/relation_vocab.json
+                 Optional files: vocab/entity_title.json, vocab/relation_title.json
                  
     Returns:
         Tuple containing:
@@ -385,20 +397,24 @@ def load_dictionary(data_dir: str) -> Tuple[Dict[str, int], Dict[str, int], Dict
             - rel2id: Relation name to integer ID mapping
             - id2ent: Integer ID to entity name mapping
             - id2rel: Integer ID to relation name mapping
+            - ent2name: Entity ID to human-readable title mapping (empty dict if not available)
+            - rel2name: Relation ID to human-readable title mapping (empty dict if not available)
             
     Raises:
-        FileNotFoundError: If vocabulary JSON files don't exist
+        FileNotFoundError: If required vocabulary JSON files don't exist
         json.JSONDecodeError: If vocabulary files contain invalid JSON
         
     Example:
-        >>> ent2id, rel2id, id2ent, id2rel = load_dictionary("datasets/kinship/")
+        >>> ent2id, rel2id, id2ent, id2rel, ent2name, rel2name = load_dictionary("datasets/kinship/")
         >>> print(ent2id["person_1"])  # 42
         >>> print(id2ent[42])          # "person_1"
+        >>> print(ent2name.get("person_1", "No title"))  # Human-readable title or fallback
     """
     # Load vocabulary mappings from JSON files
     ent2id = load_json(os.path.join(data_dir, "vocab/entity_vocab.json"))
     rel2id = load_json(os.path.join(data_dir, "vocab/relation_vocab.json"))
 
+    # Load Entity/Relation to Title mappings if available
     if os.path.exists(os.path.join(data_dir, "vocab/entity_title.json")):
         ent2name = load_json(os.path.join(data_dir, "vocab/entity_title.json"))
     else:
