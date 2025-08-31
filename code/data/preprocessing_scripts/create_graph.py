@@ -14,6 +14,8 @@ def parse_args(args=None):
                         help="Directory where the dataset is located")
     parser.add_argument("-f", "--full_graph", action="store_true",
                         help="If set, will create a full graph with all triplets, otherwise will create a graph with only training triplets")
+    parser.add_argument("-p", "--priority_triples", action="store_true",
+                        help="If set, will create a graph with the priority triplets first")
     return parser.parse_args(args)
 
 
@@ -35,6 +37,16 @@ if __name__ == '__main__':
                 e1, r, e2 = re.split(r'\s+', line.strip())
                 triplets.append((e1, r, e2))
                 triplets.append((e2, '_' + r, e1))  # add reverse triplet
+
+    if args.priority_triples and args.full_graph:
+        priority_triplets = set()
+        with open(os.path.join(dir, 'priority.txt')) as raw_file:
+            for line in raw_file:
+                e1, r, e2 = re.split(r'\s+', line.strip())
+                priority_triplets.add((e1, r, e2))
+                priority_triplets.add((e2, '_' + r, e1))
+        triplets = [t for t in triplets if t not in priority_triplets]
+        triplets = list(priority_triplets) + triplets
 
     output_file = os.path.join(dir, 'full_graph.txt' if args.full_graph else 'graph.txt')
 
