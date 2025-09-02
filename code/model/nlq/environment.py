@@ -310,6 +310,7 @@ class EnvNLQ(object):
         entity_vocab: Dict[str, int], 
         relation_vocab: Dict[str, int], 
         mode: str = 'train', 
+        use_full_graph: bool = False,
         seed: Optional[int] = None,
         embedding_server: Optional[EmbeddingServer] = None
     ) -> None:
@@ -369,8 +370,10 @@ class EnvNLQ(object):
         self.total_no_examples = self.batcher.get_question_num()
         self.token_embedding_dim = self.batcher.get_embedding_dim()
 
+        graph_path = os.path.join(input_dir, 'full_graph.txt') if use_full_graph else os.path.join(input_dir, 'graph.txt')
+
         # Initialize the knowledge graph
-        self.grapher = RelationEntityGrapher(triple_store=os.path.join(input_dir, 'graph.txt'),
+        self.grapher = RelationEntityGrapher(triple_store=graph_path,
                                              max_num_actions=max_num_actions,
                                              entity_vocab=entity_vocab,
                                              relation_vocab=relation_vocab)

@@ -50,6 +50,8 @@ def read_options() -> Dict[str, Any]:
                         help="Directory containing entity and relation vocabulary files")
     parser.add_argument("--max_num_actions", default=200, type=int,
                         help="Maximum number of relations/actions per entity in the knowledge graph")
+    parser.add_argument("--use_full_graph", type=str2bool, default='True',
+                        help="Whether to use the full knowledge graph (train + test + dev) or a subgraph (train).")
 
     # QA Dataset
     parser.add_argument('--raw_QAData_path', type=str, default="",

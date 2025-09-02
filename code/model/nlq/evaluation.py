@@ -110,7 +110,8 @@ if __name__ == '__main__':
         use_beam=options['use_beam'],
         seed=options['seed'],
         entity_vocab=entity_vocab, 
-        relation_vocab=relation_vocab, 
+        relation_vocab=relation_vocab,
+        use_full_graph=options['use_full_graph'],
         embedding_server=embedding_server,
         use_wandb=False  # Do not use WANDB for Evaluation
     )

@@ -138,6 +138,7 @@ class TrainerNLQ(object):
         seed: int,
         entity_vocab: Dict[str, int],
         relation_vocab: Dict[str, int],
+        use_full_graph: bool = False,
         use_beam: Optional[bool] = False,
         embedding_server: Optional[EmbeddingServer] = None,
         use_wandb: bool = False
@@ -245,6 +246,7 @@ class TrainerNLQ(object):
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab, 
             mode='train',
+            use_full_graph=use_full_graph,
             seed=seed,
             embedding_server=embedding_server
         )
@@ -1171,7 +1173,8 @@ if __name__ == '__main__':
             use_beam=options['use_beam'],
             seed=options['seed'],
             entity_vocab=entity_vocab, 
-            relation_vocab=relation_vocab, 
+            relation_vocab=relation_vocab,
+            use_full_graph=options['use_full_graph'], 
             embedding_server=embedding_server,
             use_wandb=options.get('track', False)
         )
@@ -1228,7 +1231,8 @@ if __name__ == '__main__':
         use_beam=options['use_beam'],
         seed=options['seed'],
         entity_vocab=entity_vocab, 
-        relation_vocab=relation_vocab, 
+        relation_vocab=relation_vocab,
+        use_full_graph=options['use_full_graph'], 
         embedding_server=embedding_server,
         use_wandb=options.get('track', False)  # Enable WANDB for evaluation if tracking is on
     )
