@@ -1,3 +1,5 @@
+# best configurations for QA hops 1, 2, 3
+
 data_input_dir="datasets/data_preprocessed/kinshiphinton/"
 vocab_dir="datasets/data_preprocessed/kinshiphinton/vocab"
 total_iterations=5000

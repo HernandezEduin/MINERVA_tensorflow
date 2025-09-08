@@ -19,7 +19,7 @@ metric:
 # Stop criteria
 early_terminate:
   type: hyperband
-  min_iter: 100
+  min_iter: 500
 
 # Parameters to sweep
 parameters:
@@ -36,16 +36,18 @@ parameters:
     value: "./datasets/data_preprocessed/kinshiphinton/kinship_hinton_qa_2hop.csv"
   cached_QAMetaData_path:
     value: "./.cache/itl/kinship_hinton_qa_2hop.json"
+  use_full_graph:
+    values: [False, True]
 
   # LSTM/Neural Network Architecture
   hidden_size:
     values: [50, 100, 200]
-  LSTM_layers:
-    values: [1, 2, 3]
+  # LSTM_layers:
+  #   values: [1, 2, 3]
 
   # Embedding Configuration
   embedding_size:
-    value: 5  # modify later
+    value: 6  # modify later
   use_entity_embeddings:
     values: [False, True]
   train_entity_embeddings:
@@ -53,7 +55,7 @@ parameters:
 
   # Reinforcement Learning
   path_length:
-    values: [2, 3, 4]
+    value: 2
   num_rollouts:
     values: [5, 10, 15, 20, 25, 30]
   gamma:
@@ -67,8 +69,8 @@ parameters:
     q: !!float 1e-04
     min: !!float 1e-4
     max: !!float 1e-2
-  grad_clip_norm:
-    values: [5, 10, 20]
+  # grad_clip_norm:
+  #   values: [5, 10, 20]
   beta:
     distribution: q_log_uniform_values
     q: !!float 1e-03
@@ -79,9 +81,9 @@ parameters:
     min: 0.0
     max: 0.1
   total_iterations:
-    value: 1000  # Reduced for sweep efficiency
+    value: 5000  # Reduced for sweep efficiency
   eval_every:
-    value: 50
+    value: 100
 
   # Evaluation Config
   pool:
