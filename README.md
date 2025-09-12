@@ -1,4 +1,4 @@
-# MINERVA TensorFlow
+# MINERVA
 Meandering In Networks of Entities to Reach Verisimilar Answers 
 
 Enhanced implementation of the MINERVA reinforcement learning framework for knowledge graph reasoning, based on the paper [Go for a Walk and Arrive at the Answer - Reasoning over Paths in Knowledge Bases using Reinforcement Learning](https://arxiv.org/abs/1711.05851).
@@ -33,7 +33,7 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 
 ## Key Improvements in This Implementation
 
-This enhanced implementation ([HernandezEduin/MINERVA_tensorflow](https://github.com/HernandezEduin/MINERVA_tensorflow)) significantly improves upon the original [shehzaadzd/MINERVA](https://github.com/shehzaadzd/MINERVA) codebase with modern compatibility and code quality enhancements.
+This enhanced implementation ([HernandezEduin/MINERVA](https://github.com/HernandezEduin/MINERVA)) significantly improves upon the original [shehzaadzd/MINERVA](https://github.com/shehzaadzd/MINERVA) codebase with modern compatibility and code quality enhancements.
 
 ### Environment & Compatibility Upgrades
 - **Modern Python support:** Upgraded to Python 3.9 + `tensorflow-cpu==2.11.1` 
@@ -90,7 +90,7 @@ bash run_nlq.sh configs/nlq/kinshiphinton.sh
 
 ## Testing
 
-Pre-trained models are available in the [saved_models](https://github.com/HernandezEduin/MINERVA_tensorflow/tree/master/saved_models) directory for immediate evaluation.
+Pre-trained models are available in the [saved_models](https://github.com/HernandezEduin/MINERVA/tree/master/saved_models) directory for immediate evaluation.
 
 ### Loading Pre-trained Models
 To use a pre-trained model, modify the configuration file:
@@ -287,11 +287,11 @@ If you use the enhanced implementations or natural language question answering c
   author = {Hernandez, Eduin and [other authors]},
   booktitle = {[Conference/Journal to be determined]},
   year = {[Year to be determined]},
-  url = {https://github.com/HernandezEduin/MINERVA_tensorflow}
+  url = {https://github.com/HernandezEduin/MINERVA}
 }
 -->
 ```
 
 For now, you can reference this repository directly:
-- Repository: [HernandezEduin/MINERVA_tensorflow](https://github.com/HernandezEduin/MINERVA_tensorflow)
+- Repository: [HernandezEduin/MINERVA](https://github.com/HernandezEduin/MINERVA)
 - Enhanced TensorFlow implementation with modern compatibility and natural language question answering support

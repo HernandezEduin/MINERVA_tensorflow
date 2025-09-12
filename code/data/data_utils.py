@@ -1,5 +1,5 @@
 """
-Data utilities for the MINERVA TensorFlow project.
+Data utilities for the MINERVA project.
 
 This module provides comprehensive utilities for data loading, preprocessing, and
 transformation for knowledge graph question answering tasks. It handles the complete

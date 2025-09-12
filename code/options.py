@@ -14,7 +14,7 @@ from typing import Dict, Any
 def read_options() -> Dict[str, Any]:
     parser = argparse.ArgumentParser(
         description="""
-        MINERVA TensorFlow: Enhanced Knowledge Graph Reasoning Framework
+        MINERVA: Enhanced Knowledge Graph Reasoning Framework
 
         This configuration system supports both structured query reasoning and natural
         language question answering over knowledge graphs. MINERVA agents learn to

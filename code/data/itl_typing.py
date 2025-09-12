@@ -1,5 +1,5 @@
 """
-Type definitions and data structures for the MINERVA TensorFlow project.
+Type definitions and data structures for the MINERVA project.
 
 This module provides common type aliases and data structures used throughout
 the project for knowledge graph operations and data handling. It defines

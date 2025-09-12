@@ -1,5 +1,5 @@
 """
-Setup utilities for the MINERVA TensorFlow project.
+Setup utilities for the MINERVA project.
 
 This module provides utility functions for project setup and configuration,
 including seed management for reproducible experiments and repository path resolution.
