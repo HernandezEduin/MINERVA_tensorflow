@@ -33,7 +33,7 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 
 ## Key Improvements in This Implementation
 
-This enhanced implementation ([HernandezEduin/MINERVA](https://github.com/HernandezEduin/MINERVA)) significantly improves upon the original [shehzaadzd/MINERVA](https://github.com/shehzaadzd/MINERVA) codebase with modern compatibility and code quality enhancements.
+This enhanced implementation ([HalcyonSolutions/MINERVA](https://github.com/HalcyonSolutions/MINERVA)) significantly improves upon the original [shehzaadzd/MINERVA](https://github.com/shehzaadzd/MINERVA) codebase with modern compatibility and code quality enhancements.
 
 ### Environment & Compatibility Upgrades
 - **Modern Python support:** Upgraded to Python 3.9 + `tensorflow-cpu==2.11.1` 
@@ -90,7 +90,7 @@ bash run_nlq.sh configs/nlq/kinshiphinton.sh
 
 ## Testing
 
-Pre-trained models are available in the [saved_models](https://github.com/HernandezEduin/MINERVA/tree/master/saved_models) directory for immediate evaluation.
+Pre-trained models are available in the [saved_models](https://github.com/HalcyonSolutions/MINERVA/tree/master/saved_models) directory for immediate evaluation.
 
 ### Loading Pre-trained Models
 To use a pre-trained model, modify the configuration file:
@@ -284,14 +284,14 @@ If you use the enhanced implementations or natural language question answering c
 <!-- TODO: Add citation for upcoming paper on enhanced MINERVA implementation
 @inproceedings{minerva_enhanced,
   title = {[Paper title to be determined]},
-  author = {Hernandez, Eduin and [other authors]},
+  author = {Hernandez, Eduin and Garcia, Luis, and Askar, Nurassyl, and Rini, Stefano},
   booktitle = {[Conference/Journal to be determined]},
   year = {[Year to be determined]},
-  url = {https://github.com/HernandezEduin/MINERVA}
+  url = {https://github.com/HalcyonSolutions/MINERVA}
 }
 -->
 ```
 
 For now, you can reference this repository directly:
-- Repository: [HernandezEduin/MINERVA](https://github.com/HernandezEduin/MINERVA)
+- Repository: [HalcyonSolutions/MINERVA](https://github.com/HalcyonSolutions/MINERVA)
 - Enhanced TensorFlow implementation with modern compatibility and natural language question answering support
