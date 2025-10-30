@@ -13,13 +13,13 @@ command:
 
 # Define the metric to optimize
 metric:
-  name: dev/hits@3
+  name: dev/hits@1
   goal: maximize
 
 # Stop criteria
 early_terminate:
   type: hyperband
-  min_iter: 500
+  min_iter: 6
 
 # Parameters to sweep
 parameters:
@@ -29,7 +29,7 @@ parameters:
   vocab_dir:
     value: "./datasets/data_preprocessed/kinshiphinton/vocab"
   max_num_actions:
-    value: 50
+    value: 100
 
   # QA Dataset
   raw_QAData_path:
@@ -42,8 +42,6 @@ parameters:
   # LSTM/Neural Network Architecture
   hidden_size:
     values: [50, 100, 200]
-  # LSTM_layers:
-  #   values: [1, 2, 3]
 
   # Embedding Configuration
   embedding_size:
@@ -63,19 +61,17 @@ parameters:
 
   # Training Configuration
   batch_size:
-    values: [2, 4, 8, 16]
+    values: [8, 16]
   learning_rate:
     distribution: q_log_uniform_values
     q: !!float 1e-04
     min: !!float 1e-4
-    max: !!float 1e-2
-  # grad_clip_norm:
-  #   values: [5, 10, 20]
+    max: !!float 4e-3
   beta:
     distribution: q_log_uniform_values
-    q: !!float 1e-03
-    min: !!float 1e-3
-    max: !!float 1e-1
+    q: !!float 1e-2
+    min: !!float 7e-2
+    max: !!float 3e-1
   Lambda:
     distribution: uniform
     min: 0.0
