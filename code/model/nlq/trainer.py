@@ -615,6 +615,8 @@ class TrainerNLQ(object):
         fetches, feeds, feed_dict = self.gpu_io_setup()
 
         train_loss = 0.0
+        dev_mrr = 0.0
+        dev_hits = 0.0
         self.batch_counter = 0
         self.environment.change_mode('train')                           # Change environment mode to training
         for episode in self.environment.get_episodes():                 # Provide the current episode, can be repeated
@@ -700,7 +702,14 @@ class TrainerNLQ(object):
                 with open(os.path.join(self.output_dir, 'scores.txt'), 'a') as score_file:
                     score_file.write("Score for iteration " + str(self.batch_counter) + "\n")
 
-                self.test(sess, beam=self.use_beam, print_paths=False, mode='dev')
+                _, _, _, _, _, _, dev_hits, dev_mrr = self.test(
+                    sess, 
+                    beam=self.use_beam, 
+                    print_paths=False, 
+                    mode='dev',
+                    max_hits=dev_hits,
+                    max_mrr=dev_mrr,
+                )
 
                 # Important: Change back to training mode to change the data
                 self.environment.change_mode('train')
@@ -714,7 +723,8 @@ class TrainerNLQ(object):
                 break
 
     def test(self, sess: tf.compat.v1.Session, beam: bool = False, print_paths: bool = False, 
-             save_model: bool = True, mode: str = 'dev') -> Tuple[float, float, float, float, float]:
+             save_model: bool = True, mode: str = 'dev', max_hits: float = 0, max_mrr: float = 0
+        ) -> Tuple[float, float, float, float, float, float, float, float]:
         """
         Evaluate the trained MINERVA agent with comprehensive metrics and optional beam search.
         
@@ -743,6 +753,9 @@ class TrainerNLQ(object):
                 - Hits@5: Fraction with correct answer in top 5 predictions
                 - Hits@10: Fraction with correct answer in top 10 predictions
                 - Hits@20: Fraction with correct answer in top 20 predictions
+                - MRR: Mean Reciprocal Rank of correct answers
+                - Max Hits@1: Maximum Hits@1 across all rollouts
+                - Max MRR: Maximum MRR across all rollouts
                 
         Note:
             - Hits@N metrics depend on number of rollouts (capped at rollout count)
@@ -765,8 +778,6 @@ class TrainerNLQ(object):
         all_final_reward_10 = 0         # Overall results for hits@10
         all_final_reward_20 = 0         # Overall results for hits@20
         mrr = 0                         # Overall results for MRR
-        max_hits_at_10 = 0              # Condition for Saving Model
-
 
         # Changing the environment to test/dev data and resetting values
         self.environment.change_mode(mode)
@@ -999,10 +1010,25 @@ class TrainerNLQ(object):
         all_final_reward_20 /= total_examples
         mrr /= total_examples
 
-        # Save best performing model based on hits@10
+        # Save best performing model based on hits@1
         if save_model:
-            if all_final_reward_10 >= max_hits_at_10:
-                max_hits_at_10 = all_final_reward_10 # Update max_hits_at_10
+            # if a better hits at one is found, save model
+            if all_final_reward_1 > max_hits:
+                # log this information
+                logger.info(f"New best model saved with Hits@1: {all_final_reward_1:7.4f} and MRR: {mrr:7.4f}")
+                logger.info(f"Model saved based on improved Hits@1: {max_hits:7.4f} --> {all_final_reward_1:7.4f}")
+
+                max_hits = all_final_reward_1 # Update max hits at 1
+                max_mrr = mrr # Update max hits at 3
+                self.save_path = self.model_saver.save(sess, self.model_dir + "model.ckpt")
+
+            # if hits at 1 is the same, but a better mrr is found, save model
+            elif (all_final_reward_1 == max_hits) and (mrr > max_mrr):
+                # log this information
+                logger.info(f"New best model saved with Hits@1: {all_final_reward_1:7.4f} and MRR: {mrr:7.4f}")
+                logger.info(f"Model saved based on improved MRR: {max_mrr:7.4f} --> {mrr:7.4f}")
+
+                max_mrr = mrr # Update max hits at 3
                 self.save_path = self.model_saver.save(sess, self.model_dir + "model.ckpt")
 
         # Store the paths for each question
@@ -1061,7 +1087,7 @@ class TrainerNLQ(object):
         else:
             logger.info(f"WANDB logging disabled for {mode} evaluation")
 
-        return all_final_reward_1, all_final_reward_3, all_final_reward_5, all_final_reward_10, all_final_reward_20
+        return all_final_reward_1, all_final_reward_3, all_final_reward_5, all_final_reward_10, all_final_reward_20, mrr, max_hits, max_mrr
 
     def finish_wandb(self) -> None:
         """
