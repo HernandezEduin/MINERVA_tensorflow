@@ -1089,6 +1089,170 @@ class TrainerNLQ(object):
 
         return all_final_reward_1, all_final_reward_3, all_final_reward_5, all_final_reward_10, all_final_reward_20, mrr, max_hits, max_mrr
 
+    def predict(self, sess: tf.compat.v1.Session, beam: bool = False, mode: str = 'dev'):
+        paths = defaultdict(list)       # Store paths for each question if print_paths is True
+        feed_dict = {}                  # Feed dictionaries, gets updated each hop during evaluation
+
+        # Changing the environment to test/dev data and resetting values
+        self.environment.change_mode(mode)
+
+        # For beam search, limit rollouts to max_num_actions to prevent indexing errors
+        effective_rollouts = min(self.test_rollouts, self.max_num_actions) if beam else self.test_rollouts
+        self.environment.change_test_rollouts(effective_rollouts)   # modifying the number of rollouts for evaluation
+        total_examples = self.environment.total_no_examples         # total number of questions
+        test_batch_counter = 0
+        logger.info(f"Predicting with mode: {mode} on {total_examples} samples...")
+        if beam:
+            logger.info(f"Beam search enabled: using {effective_rollouts} rollouts (limited by max_num_actions={self.max_num_actions})")
+
+        for episode in tqdm(self.environment.get_episodes(), desc="Evaluating"):
+            assert episode.mode != 'train', "Environment is in training mode!"
+
+            temp_batch_size = episode.no_examples                   # batch size, can vary in test due to the last batch
+            test_batch_counter += temp_batch_size
+            logger.info(f"Evaluating samples {test_batch_counter}/{total_examples} with {effective_rollouts} rollouts...")
+
+            # Set Initial Beams Probs
+            beam_probs = np.zeros((temp_batch_size * effective_rollouts, 1)) # Cumulative scores from previous steps [batch_size*k, 1]
+
+            # Provide Initial Variables
+            state = episode.get_state()                             # Initial State (current_entities, next_entities, next_relations)
+            mem = self.agent.get_mem_shape()                        # LSTM Memory Shape (num lstm layers, 2, batch size, memory size)
+            agent_mem = np.zeros((mem[0], mem[1], temp_batch_size*effective_rollouts, mem[3]), dtype='float32')
+            previous_relation = np.ones((temp_batch_size * effective_rollouts, ), dtype='int64') * self.relation_vocab['DUMMY_START_RELATION']
+            
+            feed_dict = {
+                self.range_arr: np.arange(temp_batch_size * effective_rollouts),
+                self.question_embedding: episode.get_question_embedding(),              # question embeddings
+            }
+
+            ####logger code####
+            self.entity_trajectory = []
+            self.relation_trajectory = []
+            ####################
+
+            self.log_probs = np.zeros((temp_batch_size*self.test_rollouts,)) * 1.0
+
+            # For each hop/step
+            for i in range(self.path_length):
+                # Update the feed_dict with the current info
+                feed_dict.update({
+                    self.next_relations: state['next_relations'],
+                    self.next_entities: state['next_entities'],
+                    self.current_entities: state['current_entities'],
+                    self.prev_state: agent_mem,
+                    self.prev_relation: previous_relation
+                })
+
+                # Full execution of the TF graph (Agent Step)
+                # ? I have no idea how they decided with parts to execute
+                _, agent_mem, test_scores, test_action_idx, chosen_relation = sess.run(
+                    [self.test_loss, self.test_state, self.test_logits, self.test_action_idx, self.chosen_relation],
+                    feed_dict=feed_dict
+                )
+
+                # Perform beam search
+                # If beam is on, this will override the agent's actions based on agent's logits scores
+                # hence, the agent only calculates the action probability while beam predicts the best actions
+                if beam:
+                    # Instead of greedily selecting the single best action at each step, 
+                    # beam search maintains multiple promising paths simultaneously 
+                    # to find better reasoning chains.
+                    k = effective_rollouts  # Use the same effective rollouts calculated earlier
+                    new_scores = test_scores + beam_probs   # Combine current action scores with cumulative beam scores [batch_size*k, max_actions]
+                    if i == 0:                              # At step 0, all beams start from the same state, so we need to select diverse starting paths.
+                        idx = np.argsort(new_scores)        # Sort all scores
+                        idx = idx[:, -k:]                   # Take top-k indices
+                        ranged_idx = np.tile([b for b in range(k)], temp_batch_size)
+                        idx = idx[np.arange(k*temp_batch_size), ranged_idx]
+                    else:
+                        idx = self.top_k(new_scores, k)     # Use general top-k selection to select best paths from the expanded search space.
+
+                    y = idx//self.max_num_actions           # Which beam/path each selected action comes from
+                    x = idx%self.max_num_actions            # Which action within that beam
+
+                    y += np.repeat([b*k for b in range(temp_batch_size)], k) # beam index adjustment for each question
+                    
+                    # Reorders all state information to match the selected beams
+                    state['current_entities'] = state['current_entities'][y]
+                    state['next_relations'] = state['next_relations'][y,:]
+                    state['next_entities'] = state['next_entities'][y,:]
+                    agent_mem = agent_mem[:, :, y, :]
+                    
+                    # Override Action Selection
+                    test_action_idx = x # Selected actions
+                    chosen_relation = state['next_relations'][np.arange(temp_batch_size*k), x]
+
+                    # Score Tracking
+                    beam_probs = new_scores[y, x]
+                    beam_probs = beam_probs.reshape((-1, 1))
+
+                    # Path History Maintenance
+                    for j in range(i):
+                        self.entity_trajectory[j] = self.entity_trajectory[j][y]
+                        self.relation_trajectory[j] = self.relation_trajectory[j][y]
+                
+                ####logger code####
+                # Store the current path before the environment update
+                self.entity_trajectory.append(state['current_entities'])
+                self.relation_trajectory.append(chosen_relation)
+                ####################
+
+                # Update the states for the next hop
+                previous_relation = chosen_relation
+                state = episode(test_action_idx)
+
+                # Aggregate Results
+                self.log_probs += test_scores[np.arange(self.log_probs.shape[0]), test_action_idx]
+            
+            # After the last hop
+            # If beam search was used, override the probabilities
+            if beam:
+                self.log_probs = beam_probs
+
+            ####Logger code####
+            self.entity_trajectory.append(state['current_entities'])
+
+            # Reshape the reward to [orig_batch_size, num_rollouts], to calculate for how many of the
+            # entity pair, at least one of the paths arrive at the correct answer
+            self.log_probs = np.reshape(self.log_probs, (temp_batch_size, self.test_rollouts))
+            sorted_indx = np.argsort(-self.log_probs)
+            
+            # Get current and start entities
+            ce = episode.state['current_entities'].reshape((temp_batch_size, self.test_rollouts))
+
+            for b in range(temp_batch_size):
+                # Retrive Sample's context
+                question_txt = self.environment.batcher.translate_questions([episode.question_tokens[b]])[0]    # Convert question back to text
+                start_e = self.environment.batcher.translate_entities([episode.start_entities[b * self.test_rollouts]])[0]                 # Map id to entity for source node
+                end_e = self.environment.batcher.translate_entities([episode.end_entities[b * self.test_rollouts]])[0]                     # Map id to entity for answer node
+
+                # Question Header Information
+                paths[question_txt].append(question_txt + "\n")
+                paths[question_txt].append(f"KG Start : {start_e}\n")
+                paths[question_txt].append(f"KG GT Ans: {end_e}\n")
+                
+                r = sorted_indx[b][0] # highest scoring path
+                indx = b * self.test_rollouts + r           # Convert to global index
+                paths[question_txt].append(f"Agent Ans: {str(self.environment.batcher.translate_entities([ce[b, r]])[0])}\n")
+
+                entities_path = [str(self.environment.batcher.translate_entities([e[indx]])[0]) for e in self.entity_trajectory]
+                relations_path = [str(self.environment.batcher.translate_relations([re[indx]])[0]) for re in self.relation_trajectory]
+                
+                question_path = entities_path[0]
+                for step in range(self.path_length):
+                    question_path += f" --[{relations_path[step]}]--> {entities_path[step+1]}"
+                paths[question_txt].append(f"Predicted Path: {question_path}\n")
+                paths[question_txt].append("================================\n") # clear distinction for different attempts of same question
+        
+        # Store the paths for each question
+        logger.info(f"[ printing paths at {os.path.join(self.output_dir, 'test_beam')} ]")
+        with codecs.open(self.path_logger_file_ + ".txt", 'a', 'utf-8') as pos_file:
+            for q in paths:
+                for p in paths[q]:
+                    pos_file.write(p)
+                pos_file.write("\n")
+
     def finish_wandb(self) -> None:
         """
         Properly finish the WANDB run and cleanup resources.
@@ -1271,7 +1435,7 @@ if __name__ == '__main__':
         trainer.test_rollouts = 100                      # set test rollouts to 100 for evaluation
 
         # create files to store results
-        if options['print_paths']:
+        if options['print_paths'] or options['print_predictions']:
             os.makedirs(os.path.join(path_logger_file, "test_beam"), exist_ok=True)
             trainer.path_logger_file_ = os.path.join(path_logger_file, "test_beam", "paths")
         
@@ -1280,7 +1444,8 @@ if __name__ == '__main__':
 
         # Perform Evaluation
         trainer.test(sess, beam=options['use_beam'], print_paths=options['print_paths'], save_model=False, mode='test')
-
+        if options['print_predictions']:
+            trainer.predict(sess, beam=options['use_beam'], mode='test')
     
     logging.info(f"Evaluation completed. Closing Server")
     embedding_server.close()  # Close the embedding server connection

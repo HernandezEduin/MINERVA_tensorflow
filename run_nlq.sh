@@ -9,7 +9,7 @@ cmd="python code/model/nlq/trainer.py --base_output_dir $base_output_dir --path_
     --data_input_dir $data_input_dir --vocab_dir $vocab_dir --model_load_dir $model_load_dir --load_model $load_model --total_iterations $total_iterations \
     --raw_QAData_path $raw_QAData_path --cached_QAMetaData_path $cached_QAMetaData_path --question_tokenizer_name $question_tokenizer_name \
     --eval_every $eval_every --wandb_project $wandb_project --wandb_name $wandb_name --track $track --print_path $print_path --use_beam $use_beam \
-    --gamma $gamma --num_rollouts $num_rollouts --max_num_actions $max_num_actions --use_full_graph $use_full_graph"
+    --gamma $gamma --num_rollouts $num_rollouts --max_num_actions $max_num_actions --use_full_graph $use_full_graph --print_predictions $print_predictions"
 
 echo "Executing $cmd"
 

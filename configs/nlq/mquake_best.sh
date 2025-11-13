@@ -29,5 +29,6 @@ use_full_graph=False
 path_length=2
 raw_QAData_path="./datasets/data_preprocessed/mquake/mquake_qa_2hop.csv"
 cached_QAMetaData_path="./.cache/itl/mquake_qa_2hop.json"
+print_predictions=True
 wandb_name="empty"
 track=False

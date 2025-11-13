@@ -120,6 +120,8 @@ def read_options() -> Dict[str, Any]:
                         help="Whether to use beam search during decoding. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
     parser.add_argument("--print_paths", default='False', type=str2bool,
                         help="Whether to print the reasoning paths taken by the agent. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
+    parser.add_argument("--print_predictions", default='False', type=str2bool,
+                        help="Whether to print the final predicted answers by the agent. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
 
     # Model Loading and Saving
     parser.add_argument("--model_dir", default="", type=str,
@@ -203,10 +205,9 @@ def read_options() -> Dict[str, Any]:
     os.makedirs(parsed['output_dir'])
     os.mkdir(parsed['model_dir'])
 
-    # with open(os.path.join(parsed['output_dir'], 'config.txt'), 'w') as out:
-    #     pprint(parsed, stream=out)
     with open(os.path.join(parsed['output_dir'], 'config.json'), 'w') as out:
-        json.dump(parsed, out, indent=4)
+        # sort keys for consistency
+        json.dump(parsed, out, indent=4, sort_keys=True)
 
     # print and return
     maxLen = max([len(ii) for ii in parsed.keys()])
