@@ -4,10 +4,9 @@ from __future__ import division
 import os
 import argparse
 import time
+import json
 
 import wandb
-
-from pprint import pprint
 
 from typing import Dict, Any
 
@@ -204,8 +203,10 @@ def read_options() -> Dict[str, Any]:
     os.makedirs(parsed['output_dir'])
     os.mkdir(parsed['model_dir'])
 
-    with open(os.path.join(parsed['output_dir'], 'config.txt'), 'w') as out:
-        pprint(parsed, stream=out)
+    # with open(os.path.join(parsed['output_dir'], 'config.txt'), 'w') as out:
+    #     pprint(parsed, stream=out)
+    with open(os.path.join(parsed['output_dir'], 'config.json'), 'w') as out:
+        json.dump(parsed, out, indent=4)
 
     # print and return
     maxLen = max([len(ii) for ii in parsed.keys()])
