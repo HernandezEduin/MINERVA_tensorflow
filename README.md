@@ -147,6 +147,49 @@ The framework outputs comprehensive evaluation metrics:
 
 For Countries dataset, MRR corresponds to AUC-PR (Area Under Precision-Recall curve).
 
+## Performance (ICASSP)
+
+### Kinship
+#### Summary Table (Hits@1)
+
+| Model / QA Hop Size          | Graph-Type | 1-Hop  | 2-Hop  | 3-Hop  | n-Hop  |
+| ---------------------------- | ---------- | ------ | ------ | ------ | ------ |
+| RW-End                       | Full       | 1.72e-1 | 8.19e-2 | 7.41e-2 | 8.13e-2 |
+| RW-End                       | Train      | 8.11e-2 | 7.46e-2 | 7.09e-2 | 7.43e-2 |
+| RW-Gold                      | Full       | 8.59e-2 | 7.11e-3 | 6.04e-4 | 3.55e-3 |
+| MINERVA ($d_{KG}$=12)        | Full       | 9.38e-1 | 9.84e-1 | 7.55e-1 | 5.20e-1 |
+| MINERVA ($d_{KG}$=12)        | Train      | 9.38e-2 | 7.58e-1 | 6.98e-1 | 6.30e-1 |
+
+We report **Hits@1** under two graph regimes:
+
+* **Complete KG** (train+valid+test triples as edges)
+* **Incomplete KG** (train-only edges)
+
+All hyperparameters are shared across hop buckets; only the hop budget **H** varies. For mixed-hop buckets (e.g., 2–4), H is fixed to the bucket maximum.
+
+---
+
+### Test Results for MINERVA ($d_{KG}$=12) on Full Graph
+
+| QA & Reasoning | MRR     | Hits@1  | Hits@3  | Hits@5  | Hits@10 |
+| -------------- | ------- | ------- | ------- | ------- | ------- |
+| 1-Hop          | 9.69e-1 | 9.38e-1 | 1.00    | 1.00    | 1.00    |
+| 2-Hop          | 9.92e-1 | 9.84e-1 | 1.00    | 1.00    | 1.00    |
+| 3-Hop          | 8.77e-1 | 7.55e-1 | 1.00    | 1.00    | 1.00    |
+| n-Hop          | 5.79e-1 | 5.20e-1 | 5.90e-1 | 6.70e-1 | 7.60e-1 |
+
+---
+
+### Test Results for MINERVA ($d_{KG}$=12) on Train Graph
+
+| QA & Reasoning | MRR     | Hits@1  | Hits@3  | Hits@5  | Hits@10 |
+| -------------- | ------- | ------- | ------- | ------- | ------- |
+| 1-Hop          | 2.86e-1 | 9.38e-2 | 3.44e-1 | 5.63e-1 | 6.88e-1 |
+| 2-Hop          | 8.11e-1 | 7.58e-1 | 8.39e-1 | 8.87e-1 | 9.52e-1 |
+| 3-Hop          | 8.23e-1 | 6.98e-1 | 9.62e-1 | 1.00    | 1.00    |
+| n-Hop          | 7.34e-1 | 6.30e-1 | 7.70e-1 | 8.80e-1 | 9.80e-1 |
+
+
 ## Code Structure
 
 The codebase is organized into two main reasoning frameworks:
