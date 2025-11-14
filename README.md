@@ -178,6 +178,29 @@ All hyperparameters are shared across hop buckets; only the hop budget **H** var
 | 3-Hop          | 8.77e-1 | 7.55e-1 | 1.00    | 1.00    | 1.00    |
 | n-Hop          | 5.79e-1 | 5.20e-1 | 5.90e-1 | 6.70e-1 | 7.60e-1 |
 
+#### Example Predicted Paths
+```
+1 Hop Question:
+who is the husband of margaret?
+KG Start : Margaret
+KG GT Ans: Arthur
+Agent Ans: Arthur
+Predicted Path: Margaret --[_wife]--> Arthur
+==============
+2 Hop Question:
+who is the husband of the mother of arthur?
+KG Start : Arthur
+KG GT Ans: Christopher
+Agent Ans: Christopher
+Predicted Path: Arthur --[father]--> Christopher --[NO_OP]--> Christopher
+==============
+3 Hop Question:
+who is the mother of the brother of the wife of charles?
+KG Start : Charles
+KG GT Ans: Christine
+Agent Ans: Christine
+Predicted Path: Charles --[NO_OP]--> Charles --[wife]--> Jennifer --[mother]--> Christine
+```
 ---
 
 ### Test Results for MINERVA ($d_{KG}$=12) on Train Graph
@@ -189,6 +212,116 @@ All hyperparameters are shared across hop buckets; only the hop budget **H** var
 | 3-Hop          | 8.23e-1 | 6.98e-1 | 9.62e-1 | 1.00    | 1.00    |
 | n-Hop          | 7.34e-1 | 6.30e-1 | 7.70e-1 | 8.80e-1 | 9.80e-1 |
 
+#### Example Predicted Paths
+```
+1 Hop Question:
+who is the husband of margaret?
+KG Start : Margaret
+KG GT Ans: Arthur
+Agent Ans: Colin
+Predicted Path: Margaret --[nephew]--> Colin
+==============
+2 Hop Question:
+who is the husband of the mother of arthur?
+KG Start : Arthur
+KG GT Ans: Christopher
+Agent Ans: Christopher
+Predicted Path: Arthur --[mother]--> Penelope --[husband]--> Christopher
+==============
+3 Hop Question:
+who is the mother of the brother of the wife of charles?
+KG Start : Charles
+KG GT Ans: Christine
+Agent Ans: Christine
+Predicted Path: Charles --[NO_OP]--> Charles --[wife]--> Jennifer --[mother]--> Christine
+```
+
+### MQuAKE-ST
+#### Summary Table (Hits@1)
+
+| Model / QA Hop Size        | Graph-Type | 2-Hop   | 3-Hop   | 4-Hop   | n-Hop   |
+| -------------------------- | ---------- | ------- | ------- | ------- | ------- |
+| RW-End                     | Full       | 8.53e-3 | 3.61e-3 | 1.55e-3 | 3.39e-3 |
+| RW-End                     | Train      | 8.53e-3 | 3.61e-3 | 1.56e-3 | 3.40e-3 |
+| RW-Gold                    | Full       | 1.55e-3 | 6.69e-6 | 5.00e-8 | 3.26e-5 |
+| **MINERVA ($d_{KG}$=100)** | Full       | 7.16e-1 | 3.62e-1 | 9.06e-1 | 8.16e-1 |
+| **MINERVA ($d_{KG}$=100)** | Train      | 8.63e-1 | 8.54e-1 | 9.61e-1 | 8.65e-1 |
+| MultiHopKG ($d_{KG}$=100)  | Full       | 4.33e-1 | 4.82e-1 | 3.55e-1 | 2.96e-1 |
+| MultiHopKG ($d_{KG}$=100)  | Train      | 3.72e-1 | 3.51e-1 | 3.26e-1 | 3.47e-1 |
+| **SQUIRE ($d_{KG}$=100)**  | Full       | 8.38e-1 | 8.68e-1 | 6.64e-1 | 8.35e-1 |
+| **SQUIRE ($d_{KG}$=100)**  | Train      | 4.99e-1 | 8.15e-1 | 6.74e-1 | 6.75e-1 |
+
+---
+
+### Test Results for MINERVA ($d_{KG}$=100) on Full Graph
+
+| QA & Reasoning | Hits@1  | Hits@3  | Hits@5  | Hits@10     | Hits@20 | MRR         |
+| -------------- | ------- | ------- | ------- | ----------- | ------- | ----------- |
+| **2-Hop**      | 7.16e-1 | 8.12e-1 | 8.34e-1 | 8.47e-1     | 8.57e-1 | 7.68e-1     |
+| **3-Hop**      | 3.62e-1 | 3.78e-1 | 3.90e-1 | 4.06e-1     | 4.09e-1 | 3.75e-1     |
+| **4-Hop**      | 9.06e-1 | 9.39e-1 | 9.50e-1 | 9.67e-1     | 9.67e-1 | 9.26e-1     |
+| **n-Hop**      | 8.16e-1 | 8.85e-1 | 9.03e-1 | 9.12e-1     | 9.16e-1 | 8.53e-1     |
+
+#### Example Predicted Paths
+```
+2-Hop:
+Question: what was the genre of the book authored by x1 known as "the early asimov"?
+KG Start : The Early Asimov
+KG GT Ans: science fiction
+Agent Ans: science fiction
+Path: The Early Asimov --[author]--> Isaac Asimov --[genre]--> science fiction
+==============
+
+3-Hop:
+Question: what is the birthplace of the founder of the religion associated with maria christina of austria?
+KG Start : Maria Christina of Austria
+KG GT Ans: Bethlehem
+Agent Ans: Catherine Henriette de Bourbon
+Path: Maria Christina of Austria --[given name]--> Henriette --[No Operation]--> Henriette --[(INV) given name]--> Catherine Henriette de Bourbon
+==============
+
+4-Hop / n-Hop example:
+Question: on which continent was the founder of the company that developed windows live messenger born?
+KG Start : Windows Live Messenger
+KG GT Ans: Asia
+Agent Ans: Asia
+Path: Windows Live Messenger --[developer]--> Microsoft --[board member]--> Satya Nadella --[country of citizenship]--> India --[continent]--> Asia
+```
+
+### Test Results for MINERVA ($d_{KG}$=100) on Train Graph
+
+| QA & Reasoning | Hits@1  | Hits@3  | Hits@5  | Hits@10     | Hits@20     | MRR     |
+| -------------- | ------- | ------- | ------- | ----------- | ----------- | ------- |
+| **2-Hop**      | 8.63e-1 | 9.49e-1 | 9.63e-1 | 9.73e-1     | 9.82e-1     | 9.08e-1 |
+| **3-Hop**      | 8.54e-1 | 8.98e-1 | 9.17e-1 | 9.53e-1     | 9.61e-1     | 8.85e-1 |
+| **4-Hop**      | 9.61e-1 | 9.72e-1 | 9.78e-1 | 9.83e-1     | 9.83e-1     | 9.68e-1 |
+| **n-Hop**      | 8.65e-1 | 9.28e-1 | 9.41e-1 | 9.59e-1     | 9.67e-1     | 9.00e-1 |
+
+#### Example Predicted Paths
+```
+2-Hop:
+Question: what was the genre of the book authored by x1 known as "the early asimov"?
+KG Start : The Early Asimov
+KG GT Ans: science fiction
+Agent Ans: science fiction
+Path: The Early Asimov --[author]--> Isaac Asimov --[genre]--> science fiction
+==============
+
+3-Hop:
+Question: what is the birthplace of the founder of the religion associated with maria christina of austria?
+KG Start : Maria Christina of Austria
+KG GT Ans: Bethlehem
+Agent Ans: Bethlehem
+Path: Maria Christina of Austria --[religion or worldview]--> Catholic Church --[founded by]--> Jesus Christ --[place of birth]--> Bethlehem
+==============
+
+4-Hop / n-Hop example:
+Question: on which continent was the founder of the company that developed windows live messenger born?
+KG Start : Windows Live Messenger
+KG GT Ans: Asia
+Agent Ans: Asia
+Path: Windows Live Messenger --[developer]--> Microsoft --[board member]--> Satya Nadella --[country of citizenship]--> India --[continent]--> Asia
+```
 
 ## Code Structure
 
