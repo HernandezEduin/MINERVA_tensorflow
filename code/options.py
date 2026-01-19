@@ -5,6 +5,7 @@ import os
 import argparse
 import time
 import json
+import yaml
 
 import wandb
 
@@ -145,6 +146,9 @@ def read_options() -> Dict[str, Any]:
     parser.add_argument("--timestamp", type=str, default=None,
                          help="Timestamp for the run. If None, current time is used.")
     
+    parser.add_argument('--config_yaml', type=str, default='',
+                        help='Path to a YAML configuration file to overload default parameters')
+
     # Miscellaneous
     parser.add_argument("--seed", type=int, default=42,
                          help="Random seed for reproducibility")
@@ -153,6 +157,12 @@ def read_options() -> Dict[str, Any]:
         parsed = vars(parser.parse_args())
     except IOError as msg:
         parser.error(str(msg))
+
+    if parsed['config_yaml'] != '':
+        print(f"Overloading configuration with YAML file: {parsed['config_yaml']}")
+        args_namespace = argparse.Namespace(**parsed)
+        args_namespace = overload_parse_defaults_with_yaml(parsed['config_yaml'], args_namespace)
+        parsed = vars(args_namespace)
 
     if parsed['timestamp'] is None:
         local_time = time.localtime()
@@ -216,7 +226,7 @@ def read_options() -> Dict[str, Any]:
     for keyPair in sorted(parsed.items()): print(fmtString % keyPair)
     return parsed
 
-def str2bool(string):
+def str2bool(string: str) -> bool:
     """
     Converts a string input to a boolean value.
     
@@ -243,3 +253,33 @@ def str2bool(string):
         return None
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
+
+def recurse_til_leaf(d: dict, parent_key: str = "") -> dict:
+    return_dict = {}
+    for k, v in d.items():
+        next_key = f"{parent_key}_{k}" if parent_key != "" else k
+        if isinstance(v, dict):
+            deep_dict = recurse_til_leaf(v, parent_key=next_key)
+            return_dict.update(deep_dict)
+        else:
+            return_dict[next_key] = v
+    return return_dict
+
+def overload_parse_defaults_with_yaml(yaml_location:str, args: argparse.Namespace) -> argparse.Namespace:
+    # check if the yaml file exists
+    if not os.path.exists(yaml_location):
+        print(f"Yaml file {yaml_location} does not exist, skipping yaml overload")
+        return args
+    
+    with open(yaml_location, "r") as f:
+        print(f"Trying to import the yaml file {yaml_location}")
+        yaml_args = yaml.load(f, Loader=yaml.FullLoader)
+        print(f"Imported yam with keys {yaml_args.keys()}")
+        overloaded_args = recurse_til_leaf(yaml_args)
+        for k, v in overloaded_args.items():
+            if k in args.__dict__:
+                # Change the property not they key
+                setattr(args, k, v)
+            else:
+                raise ValueError(f"Yaml config file {yaml_location} imposes parameter '{k}', however this parameter is not found in args")
+    return args

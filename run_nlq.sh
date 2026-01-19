@@ -1,16 +1,10 @@
 #!/bin/bash
 
-source $1
+config="$1"
 export PYTHONPATH="."
 gpu_id=1
-cmd="python code/model/nlq/trainer.py --base_output_dir $base_output_dir --path_length $path_length --hidden_size $hidden_size --embedding_size $embedding_size \
-    --batch_size $batch_size --beta $beta --Lambda $Lambda --learning_rate $learning_rate --use_entity_embeddings $use_entity_embeddings \
-    --train_entity_embeddings $train_entity_embeddings --train_relation_embeddings $train_relation_embeddings \
-    --data_input_dir $data_input_dir --vocab_dir $vocab_dir --model_load_dir $model_load_dir --load_model $load_model --total_iterations $total_iterations \
-    --raw_QAData_path $raw_QAData_path --cached_QAMetaData_path $cached_QAMetaData_path --question_tokenizer_name $question_tokenizer_name \
-    --eval_every $eval_every --wandb_project $wandb_project --wandb_name $wandb_name --track $track --print_path $print_path --use_beam $use_beam \
-    --gamma $gamma --num_rollouts $num_rollouts --max_num_actions $max_num_actions --use_full_graph $use_full_graph --print_predictions $print_predictions"
 
-echo "Executing $cmd"
+cmd=(python code/model/nlq/trainer.py --config_yaml "$config")
+echo "Executing: CUDA_VISIBLE_DEVICES=$gpu_id ${cmd[*]}"
 
-CUDA_VISIBLE_DEVICES=$gpu_id $cmd
+CUDA_VISIBLE_DEVICES=$gpu_id "${cmd[@]}"
