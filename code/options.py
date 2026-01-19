@@ -157,7 +157,7 @@ def read_options() -> Dict[str, Any]:
         parsed = vars(parser.parse_args())
     except IOError as msg:
         parser.error(str(msg))
-
+    
     if parsed['config_yaml'] != '':
         print(f"Overloading configuration with YAML file: {parsed['config_yaml']}")
         args_namespace = argparse.Namespace(**parsed)
@@ -221,9 +221,10 @@ def read_options() -> Dict[str, Any]:
 
     # print and return
     maxLen = max([len(ii) for ii in parsed.keys()])
-    fmtString = '\t%' + str(maxLen) + 's : %s'
+    fmtString = '\t%' + str(maxLen) + 's : %s (type=%s)'
     print('Arguments:')
-    for keyPair in sorted(parsed.items()): print(fmtString % keyPair)
+    for key in sorted(parsed.keys()):
+        print(fmtString % (key, str(parsed[key]), str(type(parsed[key]))))
     return parsed
 
 def str2bool(string: str) -> bool:
@@ -274,7 +275,7 @@ def overload_parse_defaults_with_yaml(yaml_location:str, args: argparse.Namespac
     with open(yaml_location, "r") as f:
         print(f"Trying to import the yaml file {yaml_location}")
         yaml_args = yaml.load(f, Loader=yaml.FullLoader)
-        print(f"Imported yam with keys {yaml_args.keys()}")
+        print(f"Imported yaml with keys {yaml_args.keys()}")
         overloaded_args = recurse_til_leaf(yaml_args)
         for k, v in overloaded_args.items():
             if k in args.__dict__:
