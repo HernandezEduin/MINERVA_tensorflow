@@ -163,6 +163,7 @@ def read_options() -> Dict[str, Any]:
         parser.error(str(msg))
     
     if parsed['config_yaml'] != '':
+        assert os.path.exists(parsed['config_yaml']), f"YAML config file {parsed['config_yaml']} does not exist."
         print(f"Overloading configuration with YAML file: {parsed['config_yaml']}")
         args_namespace = argparse.Namespace(**parsed)
         args_namespace = overload_parse_defaults_with_yaml(parsed['config_yaml'], args_namespace)
