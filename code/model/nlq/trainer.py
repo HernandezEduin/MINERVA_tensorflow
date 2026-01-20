@@ -126,6 +126,7 @@ class TrainerNLQ(object):
         LSTM_layers: int,
         projection_adapter: str,
         projection_layers: int,
+        projection_hidden: int,
         learning_rate: float,
         grad_clip_norm: int,
         gamma: float,
@@ -218,6 +219,7 @@ class TrainerNLQ(object):
         self.LSTM_layers = LSTM_layers
         self.projection_adapter = projection_adapter
         self.projection_layers = projection_layers
+        self.projection_hidden = projection_hidden
         self.learning_rate = learning_rate
         self.grad_clip_norm = grad_clip_norm
         self.gamma = gamma
@@ -272,6 +274,7 @@ class TrainerNLQ(object):
             LSTM_layers=LSTM_layers,
             projection_adapter=projection_adapter,
             projection_layers=projection_layers,
+            projection_hidden=projection_hidden,
             batch_size=batch_size,
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab
@@ -1359,6 +1362,7 @@ if __name__ == '__main__':
             LSTM_layers=options['LSTM_layers'],
             projection_adapter=options['projection_adapter'],
             projection_layers=options['projection_layers'],
+            projection_hidden=options['projection_hidden'],
             learning_rate=options['learning_rate'],
             grad_clip_norm=options['grad_clip_norm'],
             gamma=options['gamma'],

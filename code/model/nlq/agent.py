@@ -80,6 +80,7 @@ class AgentNLQ(object):
         LSTM_layers: int,
         projection_adapter: str,
         projection_layers: int,
+        projection_hidden: int,
         batch_size: int,
         entity_vocab: Dict[str, int],
         relation_vocab: Dict[str, int]
@@ -103,6 +104,7 @@ class AgentNLQ(object):
             LSTM_layers: Number of LSTM layers in policy network
             projection_adapter: Type of question projection adapter ('linear', 'mlp', 'residual')
             projection_layers: Number of layers in question projection MLP
+            projection_hidden: Hidden dimension size for projection adapter
             batch_size: Training batch size per question
             entity_vocab: Entity name to integer ID mapping for embedding lookup
             relation_vocab: Relation name to integer ID mapping for embedding lookup
@@ -135,6 +137,7 @@ class AgentNLQ(object):
         self.LSTM_Layers = LSTM_layers                                      # number of layers in LSTM
         self.projection_adapter = projection_adapter                        # type of question projection adapter ('linear', 'mlp', 'residual')
         self.projection_layers = projection_layers                          # number of layers in question projection MLP
+        self.projection_hidden = projection_hidden                          # hidden dimension size for projection adapter
         self.batch_size = batch_size * num_rollouts                        # effective batch size during training, also accounting the rollouts per questions
         self.dummy_start_label = tf.constant(                               # dummy relation for step 0 NOTE: Might be self loop action
             np.ones(self.batch_size, dtype='int64') * relation_vocab['DUMMY_START_RELATION'])
@@ -193,9 +196,6 @@ class AgentNLQ(object):
             else:
                 self.qproj_kernel_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, self.out_dim], name="qproj_kernel_ph")
                 self.qproj_bias_ph   = tf.compat.v1.placeholder(tf.float32, shape=[self.out_dim],      name="qproj_bias_ph")
-                
-                # Hyperparam for adapter capacity (keep modest to avoid bloating params)
-                self.adapter_hidden = getattr(self, "adapter_hidden", 256)
             
             # Create initialization operation (to be called later if pretrained weights exist)
             self.question_proj_init = None  # Will be set up after first call to question_projr
@@ -396,8 +396,19 @@ class AgentNLQ(object):
 
         return loss, new_state, tf.nn.log_softmax(scores), action_idx, chosen_relation
 
-    # forward method for the question projection using functional API
+    # Question Projection Adapters
     def question_proj_linear(self, x):
+        """
+        Projects question embeddings into the policy/KG feature space using a
+        linear transformation. This allows for a simple alignment of the question
+        representation with the graph embedding space.
+        Linear Projection:
+            output = ReLU(W * x + b)
+        Args:
+            x: Input question embeddings. Shape: [batch_size, input_dimension]
+        Returns:
+            Projected question embeddings. Shape: [batch_size, out_dim]
+        """
         with tf.compat.v1.variable_scope("question_dense", reuse=tf.compat.v1.AUTO_REUSE):
             output = tf.compat.v1.layers.dense(
                 x,
@@ -427,13 +438,29 @@ class AgentNLQ(object):
             
             return output
     
+    # Multi-layer MLP projection
     def question_proj_mlp(self, x):
+        """
+        Projects question embeddings into the policy/KG feature space using a
+        multi-layer perceptron (MLP). This allows for flexible transformation of the
+        question representation to better align with the graph embedding space.
+        MLP Architecture:
+        MLP:
+            h_1 = ReLU(W_1 * x + b_1)
+            h_2 = ReLU(W_2 * h_1 + b_2)
+            ...
+            output = W_n * h_{n-1} + b_n
+        Args:
+            x: Input question embeddings. Shape: [batch_size, input_dimension]
+        Returns:
+            Projected question embeddings. Shape: [batch_size, out_dim]
+        """
         with tf.compat.v1.variable_scope("question_mlp", reuse=tf.compat.v1.AUTO_REUSE):
             h = x
             for layer_idx in range(self.projection_layers - 1):
                 h = tf.compat.v1.layers.dense(
                     h,
-                    self.out_dim,
+                    self.projection_hidden,
                     activation=tf.nn.relu,
                     name=f"mlp_fc{layer_idx+1}"
                 )
@@ -468,12 +495,23 @@ class AgentNLQ(object):
 
             return output
 
+    # Residual adapter projection
     def question_proj_residual(self, x):
         """
-        Residual adapter (dim-safe):
-            z = W_down x + b_down                # down-project from BERT dim to out_dim
-            r = W2 relu(W1 z + b1) + b2          # residual MLP in out_dim space
-            y = z + r
+        Projects question embeddings into the policy/KG feature space using a
+        residual MLP architecture. This allows for flexible adaptation of the
+        question representation while preserving the original information through
+        a skip connection.
+        ```
+        Residual Adapter:
+            z = Linear(x)
+            r = MLP(z)
+            output = z + r
+        ```
+        Args:
+            x: Input question embeddings. Shape: [batch_size, input_dimension]
+        Returns:
+            Projected question embeddings. Shape: [batch_size, out_dim]
         """
         with tf.compat.v1.variable_scope("question_residual_adapter", reuse=tf.compat.v1.AUTO_REUSE):
             # 1) Linear down-projection to policy/KG feature space (NO activation)
@@ -490,7 +528,7 @@ class AgentNLQ(object):
             for layer_idx in range(self.projection_layers - 1):
                 h = tf.compat.v1.layers.dense(
                     h,
-                    self.adapter_hidden,
+                    self.projection_hidden,
                     activation=tf.nn.relu,
                     use_bias=True,
                     name=f"res_fc{layer_idx+1}"
@@ -522,52 +560,6 @@ class AgentNLQ(object):
                     self.question_proj_init = tf.no_op()
 
             return output
-
-        # with tf.compat.v1.variable_scope("question_dense", reuse=tf.compat.v1.AUTO_REUSE):
-        #     # 1) Linear down-projection to policy/KG feature space (NO activation)
-        #     z = tf.compat.v1.layers.dense(
-        #         x,
-        #         self.out_dim,
-        #         activation=None,
-        #         use_bias=True,
-        #         name="down"
-        #     )
-
-        #     # 2) Residual MLP in out_dim space
-        #     h = tf.compat.v1.layers.dense(
-        #         z,
-        #         self.adapter_hidden,
-        #         activation=tf.nn.relu,
-        #         use_bias=True,
-        #         name="res_fc1"
-        #     )
-        #     r = tf.compat.v1.layers.dense(
-        #         h,
-        #         self.out_dim,
-        #         activation=None,
-        #         use_bias=True,
-        #         name="res_fc2"
-        #     )
-
-        #     output = z + r  # residual add in the same dimension
-
-        #     # --- Optional: pretrained init for the DOWN projection only ---
-        #     # This initializes only the "down" layer (kernel+bias). Residual MLP stays randomly initialized.
-        #     if self.question_proj_init is None:
-        #         try:
-        #             down_kernel = tf.compat.v1.get_variable("down/kernel")
-        #             down_bias   = tf.compat.v1.get_variable("down/bias")
-
-        #             # Assert shapes match at runtime where possible
-        #             self.question_proj_init = tf.group(
-        #                 tf.compat.v1.assign(down_kernel, self.qproj_kernel_ph),
-        #                 tf.compat.v1.assign(down_bias,   self.qproj_bias_ph)
-        #             )
-        #         except Exception:
-        #             # If variable names differ or init not needed, safely no-op
-        #             self.question_proj_init = tf.no_op()
-
-        #     return output
 
     def __call__(
         self, 

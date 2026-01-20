@@ -54,6 +54,8 @@ def read_options() -> Dict[str, Any]:
                         help="Whether to use the full knowledge graph (train + test + dev) or a subgraph (train).")
 
     # QA Dataset
+    parser.add_argument("--question_format", default="full_text", type=str, choices=["full_text", "relation_only", "graph_only"],
+                        help="Format of the question input ('full_text', 'relation_only', 'graph_only')")
     parser.add_argument('--raw_QAData_path', type=str, default="",
                          help="Path to the raw QA CSV dataset. Only required for NLQ Task.")
     parser.add_argument('--cached_QAMetaData_path', type=str, default="",
@@ -84,6 +86,8 @@ def read_options() -> Dict[str, Any]:
                         help="Type of question projection adapter ('linear', 'mlp', 'residual')")
     parser.add_argument("--projection_layers", default=2, type=int,
                         help="Number of layers in the projection adapter (if applicable)")
+    parser.add_argument("--projection_hidden", default=256, type=int,
+                        help="Hidden size for each layer in the projection adapter (if applicable)")
 
     # Reinforcement Learning
     # TODO: See if we can modify path length to reasoning length
