@@ -78,6 +78,8 @@ class AgentNLQ(object):
         num_rollouts: int,
         test_rollouts: int,
         LSTM_layers: int,
+        projection_adapter: str,
+        projection_layers: int,
         batch_size: int,
         entity_vocab: Dict[str, int],
         relation_vocab: Dict[str, int]
@@ -99,6 +101,8 @@ class AgentNLQ(object):
             num_rollouts: Parallel rollouts per question during training
             test_rollouts: Parallel rollouts per question during evaluation
             LSTM_layers: Number of LSTM layers in policy network
+            projection_adapter: Type of question projection adapter ('linear', 'mlp', 'residual')
+            projection_layers: Number of layers in question projection MLP
             batch_size: Training batch size per question
             entity_vocab: Entity name to integer ID mapping for embedding lookup
             relation_vocab: Relation name to integer ID mapping for embedding lookup
@@ -109,6 +113,9 @@ class AgentNLQ(object):
             - LSTM uses peephole connections for improved memory
             - Question projection aligns text embeddings with graph space
         """
+
+        assert projection_adapter in ['linear', 'mlp', 'residual'], \
+            "projection_adapter must be one of 'linear', 'mlp', or 'residual'"
 
         self.action_vocab_size = len(relation_vocab)                        # number of possible actions
         self.entity_vocab_size = len(entity_vocab)                          # number of possible entities
@@ -126,6 +133,8 @@ class AgentNLQ(object):
         self.num_rollouts = num_rollouts                                    # number of simultaneous paths to take per question during 'training'
         self.test_rollouts = test_rollouts                                  # number of simulataneous paths to take per question during 'evaluation'
         self.LSTM_Layers = LSTM_layers                                      # number of layers in LSTM
+        self.projection_adapter = projection_adapter                        # type of question projection adapter ('linear', 'mlp', 'residual')
+        self.projection_layers = projection_layers                          # number of layers in question projection MLP
         self.batch_size = batch_size * num_rollouts                        # effective batch size during training, also accounting the rollouts per questions
         self.dummy_start_label = tf.constant(                               # dummy relation for step 0 NOTE: Might be self loop action
             np.ones(self.batch_size, dtype='int64') * relation_vocab['DUMMY_START_RELATION'])
@@ -176,43 +185,27 @@ class AgentNLQ(object):
 
         # Project text question embedding to the policy feature space
         with tf.compat.v1.variable_scope("question_projection"):
+            self.out_dim = self.m * self.embedding_size
+
             # Create placeholder for pretrained question projection weights
-            self.question_embedding_placeholder = tf.compat.v1.placeholder(tf.float32, [None, self.m * self.embedding_size])
+            if self.projection_adapter == 'linear' or self.projection_adapter == 'mlp':
+                self.question_embedding_placeholder = tf.compat.v1.placeholder(tf.float32, [None, self.m * self.embedding_size])
+            else:
+                self.qproj_kernel_ph = tf.compat.v1.placeholder(tf.float32, shape=[None, self.out_dim], name="qproj_kernel_ph")
+                self.qproj_bias_ph   = tf.compat.v1.placeholder(tf.float32, shape=[self.out_dim],      name="qproj_bias_ph")
+                
+                # Hyperparam for adapter capacity (keep modest to avoid bloating params)
+                self.adapter_hidden = getattr(self, "adapter_hidden", 256)
             
             # Create initialization operation (to be called later if pretrained weights exist)
-            self.question_proj_init = None  # Will be set up after first call to question_proj
-            
-            # forward method for the question projection using functional API
-            def question_proj(x):
-                with tf.compat.v1.variable_scope("question_dense", reuse=tf.compat.v1.AUTO_REUSE):
-                    output = tf.compat.v1.layers.dense(
-                        x,
-                        self.m * self.embedding_size,
-                        activation=tf.nn.relu,
-                        name="dense"
-                    )
+            self.question_proj_init = None  # Will be set up after first call to question_projr
                     
-                    # Set up initialization operation on first call
-                    if self.question_proj_init is None:
-                        # Get the dense layer variables
-                        proj_vars = tf.compat.v1.get_collection(
-                            tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, 
-                            scope="question_projection/question_dense/dense"
-                        )
-                        if len(proj_vars) >= 2:  # weight and bias
-                            weight_var, bias_var = proj_vars[0], proj_vars[1]
-                            # Create assignment operations - simplified for compatibility
-                            try:
-                                weight_assign = weight_var.assign(self.question_embedding_placeholder[:tf.shape(weight_var)[0], :tf.shape(weight_var)[1]])
-                                bias_assign = bias_var.assign(self.question_embedding_placeholder[tf.shape(weight_var)[0], :tf.shape(bias_var)[0]])
-                                self.question_proj_init = tf.group(weight_assign, bias_assign)
-                            except:
-                                # If assignment fails, skip pretrained initialization
-                                self.question_proj_init = tf.no_op()
-                    
-                    return output
-                
-            self.question_proj = question_proj
+            if self.projection_adapter == 'linear':
+                self.question_proj = self.question_proj_linear
+            elif self.projection_adapter == 'mlp':
+                self.question_proj = self.question_proj_mlp
+            else:  # residual
+                self.question_proj = self.question_proj_residual
 
     def get_mem_shape(self) -> Tuple[int, int, Optional[int], int]:
         """
@@ -402,6 +395,179 @@ class AgentNLQ(object):
         chosen_relation = tf.gather_nd(next_relations, tf.transpose(tf.stack([range_arr, action_idx])))
 
         return loss, new_state, tf.nn.log_softmax(scores), action_idx, chosen_relation
+
+    # forward method for the question projection using functional API
+    def question_proj_linear(self, x):
+        with tf.compat.v1.variable_scope("question_dense", reuse=tf.compat.v1.AUTO_REUSE):
+            output = tf.compat.v1.layers.dense(
+                x,
+                self.out_dim,
+                activation=tf.nn.relu, # TODO: remove relu in future experiments
+                # activation=None,
+                name="dense"
+            )
+            
+            # Set up initialization operation on first call
+            if self.question_proj_init is None:
+                # Get the dense layer variables
+                proj_vars = tf.compat.v1.get_collection(
+                    tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, 
+                    scope="question_projection/question_dense/dense"
+                )
+                if len(proj_vars) >= 2:  # weight and bias
+                    weight_var, bias_var = proj_vars[0], proj_vars[1]
+                    # Create assignment operations - simplified for compatibility
+                    try:
+                        weight_assign = weight_var.assign(self.question_embedding_placeholder[:tf.shape(weight_var)[0], :tf.shape(weight_var)[1]])
+                        bias_assign = bias_var.assign(self.question_embedding_placeholder[tf.shape(weight_var)[0], :tf.shape(bias_var)[0]])
+                        self.question_proj_init = tf.group(weight_assign, bias_assign)
+                    except:
+                        # If assignment fails, skip pretrained initialization
+                        self.question_proj_init = tf.no_op()
+            
+            return output
+    
+    def question_proj_mlp(self, x):
+        with tf.compat.v1.variable_scope("question_mlp", reuse=tf.compat.v1.AUTO_REUSE):
+            h = x
+            for layer_idx in range(self.projection_layers - 1):
+                h = tf.compat.v1.layers.dense(
+                    h,
+                    self.out_dim,
+                    activation=tf.nn.relu,
+                    name=f"mlp_fc{layer_idx+1}"
+                )
+            output = tf.compat.v1.layers.dense(
+                h,
+                self.out_dim,
+                activation=None,
+                name=f"mlp_fc{self.projection_layers}"
+            )
+
+            if self.question_proj_init is None:
+                # Get the dense layer variables
+                proj_vars = tf.compat.v1.get_collection(
+                    tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, 
+                    scope="question_projection/question_mlp"
+                )
+                if len(proj_vars) >= 2 * self.projection_layers:  # weight and bias for each layer
+                    assign_ops = []
+                    for layer_idx in range(self.projection_layers):
+                        weight_var = proj_vars[2 * layer_idx]
+                        bias_var = proj_vars[2 * layer_idx + 1]
+                        try:
+                            weight_assign = weight_var.assign(self.question_embedding_placeholder[:tf.shape(weight_var)[0], :tf.shape(weight_var)[1]])
+                            bias_assign = bias_var.assign(self.question_embedding_placeholder[tf.shape(weight_var)[0], :tf.shape(bias_var)[0]])
+                            assign_ops.extend([weight_assign, bias_assign])
+                        except:
+                            # If assignment fails, skip pretrained initialization
+                            self.question_proj_init = tf.no_op()
+                            break
+                    else:
+                        self.question_proj_init = tf.group(*assign_ops)
+
+            return output
+
+    def question_proj_residual(self, x):
+        """
+        Residual adapter (dim-safe):
+            z = W_down x + b_down                # down-project from BERT dim to out_dim
+            r = W2 relu(W1 z + b1) + b2          # residual MLP in out_dim space
+            y = z + r
+        """
+        with tf.compat.v1.variable_scope("question_residual_adapter", reuse=tf.compat.v1.AUTO_REUSE):
+            # 1) Linear down-projection to policy/KG feature space (NO activation)
+            z = tf.compat.v1.layers.dense(
+                x,
+                self.out_dim,
+                activation=None,
+                use_bias=True,
+                name="down"
+            )
+
+            # 2) Residual MLP in out_dim space
+            h = z
+            for layer_idx in range(self.projection_layers - 1):
+                h = tf.compat.v1.layers.dense(
+                    h,
+                    self.adapter_hidden,
+                    activation=tf.nn.relu,
+                    use_bias=True,
+                    name=f"res_fc{layer_idx+1}"
+                )
+            r = tf.compat.v1.layers.dense(
+                h,
+                self.out_dim,
+                activation=None,
+                use_bias=True,
+                name=f"res_fc{self.projection_layers}"
+            )
+
+            output = z + r  # residual add in the same dimension
+
+            # --- Optional: pretrained init for the DOWN projection only ---
+            # This initializes only the "down" layer (kernel+bias). Residual MLP stays randomly initialized.
+            if self.question_proj_init is None:
+                try:
+                    down_kernel = tf.compat.v1.get_variable("down/kernel")
+                    down_bias   = tf.compat.v1.get_variable("down/bias")
+
+                    # Assert shapes match at runtime where possible
+                    self.question_proj_init = tf.group(
+                        tf.compat.v1.assign(down_kernel, self.qproj_kernel_ph),
+                        tf.compat.v1.assign(down_bias,   self.qproj_bias_ph)
+                    )
+                except Exception:
+                    # If variable names differ or init not needed, safely no-op
+                    self.question_proj_init = tf.no_op()
+
+            return output
+
+        # with tf.compat.v1.variable_scope("question_dense", reuse=tf.compat.v1.AUTO_REUSE):
+        #     # 1) Linear down-projection to policy/KG feature space (NO activation)
+        #     z = tf.compat.v1.layers.dense(
+        #         x,
+        #         self.out_dim,
+        #         activation=None,
+        #         use_bias=True,
+        #         name="down"
+        #     )
+
+        #     # 2) Residual MLP in out_dim space
+        #     h = tf.compat.v1.layers.dense(
+        #         z,
+        #         self.adapter_hidden,
+        #         activation=tf.nn.relu,
+        #         use_bias=True,
+        #         name="res_fc1"
+        #     )
+        #     r = tf.compat.v1.layers.dense(
+        #         h,
+        #         self.out_dim,
+        #         activation=None,
+        #         use_bias=True,
+        #         name="res_fc2"
+        #     )
+
+        #     output = z + r  # residual add in the same dimension
+
+        #     # --- Optional: pretrained init for the DOWN projection only ---
+        #     # This initializes only the "down" layer (kernel+bias). Residual MLP stays randomly initialized.
+        #     if self.question_proj_init is None:
+        #         try:
+        #             down_kernel = tf.compat.v1.get_variable("down/kernel")
+        #             down_bias   = tf.compat.v1.get_variable("down/bias")
+
+        #             # Assert shapes match at runtime where possible
+        #             self.question_proj_init = tf.group(
+        #                 tf.compat.v1.assign(down_kernel, self.qproj_kernel_ph),
+        #                 tf.compat.v1.assign(down_bias,   self.qproj_bias_ph)
+        #             )
+        #         except Exception:
+        #             # If variable names differ or init not needed, safely no-op
+        #             self.question_proj_init = tf.no_op()
+
+        #     return output
 
     def __call__(
         self, 

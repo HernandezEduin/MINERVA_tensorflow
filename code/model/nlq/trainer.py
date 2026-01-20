@@ -124,6 +124,8 @@ class TrainerNLQ(object):
         train_entity_embeddings: bool,
         train_relation_embeddings: bool,
         LSTM_layers: int,
+        projection_adapter: str,
+        projection_layers: int,
         learning_rate: float,
         grad_clip_norm: int,
         gamma: float,
@@ -169,6 +171,8 @@ class TrainerNLQ(object):
             train_entity_embeddings: Whether to fine-tune entity embeddings
             train_relation_embeddings: Whether to train relation embeddings
             LSTM_layers: Number of LSTM layers in the agent network
+            projection_adapter: Type of question projection adapter ('linear', 'mlp', 'residual')
+            projection_layers: Number of layers in the projection adapter (if applicable)
             learning_rate: Learning rate for the optimizer
             grad_clip_norm: Maximum gradient norm for gradient clipping
             gamma: Discount factor for future rewards in RL
@@ -212,6 +216,8 @@ class TrainerNLQ(object):
         self.train_entity_embeddings = train_entity_embeddings
         self.train_relation_embeddings = train_relation_embeddings
         self.LSTM_layers = LSTM_layers
+        self.projection_adapter = projection_adapter
+        self.projection_layers = projection_layers
         self.learning_rate = learning_rate
         self.grad_clip_norm = grad_clip_norm
         self.gamma = gamma
@@ -264,6 +270,8 @@ class TrainerNLQ(object):
             num_rollouts=num_rollouts,
             test_rollouts=test_rollouts,
             LSTM_layers=LSTM_layers,
+            projection_adapter=projection_adapter,
+            projection_layers=projection_layers,
             batch_size=batch_size,
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab
@@ -1349,6 +1357,8 @@ if __name__ == '__main__':
             train_entity_embeddings=options['train_entity_embeddings'],
             train_relation_embeddings=options['train_relation_embeddings'],
             LSTM_layers=options['LSTM_layers'],
+            projection_adapter=options['projection_adapter'],
+            projection_layers=options['projection_layers'],
             learning_rate=options['learning_rate'],
             grad_clip_norm=options['grad_clip_norm'],
             gamma=options['gamma'],
@@ -1407,6 +1417,8 @@ if __name__ == '__main__':
         train_entity_embeddings=options['train_entity_embeddings'],
         train_relation_embeddings=options['train_relation_embeddings'],
         LSTM_layers=options['LSTM_layers'],
+        projection_adapter=options['projection_adapter'],
+        projection_layers=options['projection_layers'],
         learning_rate=options['learning_rate'],
         grad_clip_norm=options['grad_clip_norm'],
         gamma=options['gamma'],

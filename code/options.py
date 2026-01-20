@@ -80,7 +80,11 @@ def read_options() -> Dict[str, Any]:
                         help="Whether to fine-tune entity embeddings during training. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
     parser.add_argument("--train_relation_embeddings", default='True', type=str2bool,
                         help="Whether to train relation embeddings. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
-    
+    parser.add_argument("--projection_adapter", default="linear", type=str, choices=["linear", "mlp", "residual"],
+                        help="Type of question projection adapter ('linear', 'mlp', 'residual')")
+    parser.add_argument("--projection_layers", default=2, type=int,
+                        help="Number of layers in the projection adapter (if applicable)")
+
     # Reinforcement Learning
     # TODO: See if we can modify path length to reasoning length
     parser.add_argument("--path_length", default=3, type=int,
