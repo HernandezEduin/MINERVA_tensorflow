@@ -18,6 +18,8 @@ total_iterations: 5000
 train_entity_embeddings: True
 train_relation_embeddings: True
 print_paths: False
+projection_adapter: "linear"
+projection_layers: 2
 question_tokenizer_name: "bert-base-uncased"
 use_beam: True
 use_entity_embeddings: False
