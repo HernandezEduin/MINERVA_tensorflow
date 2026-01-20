@@ -115,6 +115,7 @@ class TrainerNLQ(object):
         test_rollouts: int,
         data_input_dir: str,
         question_tokenizer_name: str,
+        question_format: str,
         cached_QAMetaData_path: str,
         raw_QAData_path: str,
         max_num_actions: int,
@@ -163,6 +164,7 @@ class TrainerNLQ(object):
             test_rollouts: Number of evaluation rollouts per question
             data_input_dir: Directory containing knowledge graph data files
             question_tokenizer_name: Tokenizer name for question embeddings
+            question_format: Format of the question input ('full_text', 'relation_only', 'graph_only')
             cached_QAMetaData_path: Path to cached tokenized QA metadata JSON file
             raw_QAData_path: Path to the raw QA CSV dataset
             max_num_actions: Maximum number of relations/actions per entity
@@ -208,6 +210,7 @@ class TrainerNLQ(object):
         self.test_rollouts = test_rollouts
         self.data_input_dir = data_input_dir
         self.question_tokenizer_name = question_tokenizer_name
+        self.question_format = question_format
         self.cached_QAMetaData_path = cached_QAMetaData_path
         self.raw_QAData_path = raw_QAData_path
         self.max_num_actions = max_num_actions
@@ -248,6 +251,7 @@ class TrainerNLQ(object):
             test_rollouts=test_rollouts,
             data_input_dir=data_input_dir,
             question_tokenizer_name=question_tokenizer_name,
+            question_format=question_format,
             cached_QAMetaData_path=cached_QAMetaData_path,
             raw_QAData_path=raw_QAData_path,
             max_num_actions=max_num_actions,
@@ -1351,6 +1355,7 @@ if __name__ == '__main__':
             test_rollouts=options['test_rollouts'],
             data_input_dir=options['data_input_dir'],
             question_tokenizer_name=options['question_tokenizer_name'],
+            question_format=options['question_format'],
             cached_QAMetaData_path=options['cached_QAMetaData_path'],
             raw_QAData_path=options['raw_QAData_path'],
             max_num_actions=options['max_num_actions'],
@@ -1412,6 +1417,7 @@ if __name__ == '__main__':
         test_rollouts=options['test_rollouts'],
         data_input_dir=options['data_input_dir'],
         question_tokenizer_name=options['question_tokenizer_name'],
+        question_format=options['question_format'],
         cached_QAMetaData_path=options['cached_QAMetaData_path'],
         raw_QAData_path=options['raw_QAData_path'],
         max_num_actions=options['max_num_actions'],
@@ -1423,6 +1429,7 @@ if __name__ == '__main__':
         LSTM_layers=options['LSTM_layers'],
         projection_adapter=options['projection_adapter'],
         projection_layers=options['projection_layers'],
+        projection_hidden=options['projection_hidden'],
         learning_rate=options['learning_rate'],
         grad_clip_norm=options['grad_clip_norm'],
         gamma=options['gamma'],
@@ -1448,7 +1455,7 @@ if __name__ == '__main__':
         set_seeds(options['seed'])
         trainer.initialize(restore=save_path, sess=sess) # check if it is fine to initialize an already trained model or if we need to create one before this line
 
-        trainer.test_rollouts = 100                      # set test rollouts to 100 for evaluation
+        # trainer.test_rollouts = 100                      # set test rollouts to 100 for evaluation
 
         # create files to store results
         if options['print_paths'] or options['print_predictions']:

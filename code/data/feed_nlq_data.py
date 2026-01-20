@@ -47,6 +47,7 @@ class QuestionBatcher:
         input_dir: str,
         batch_size: int, 
         question_tokenizer_name: str,
+        question_format: str,
         cached_QAMetaData_path: str,
         raw_QAData_path: str,
         mode: str = "train",
@@ -61,6 +62,7 @@ class QuestionBatcher:
             input_dir: Directory containing entity and relation vocabularies
             batch_size: Number of samples per batch
             question_tokenizer_name: HuggingFace model name for question tokenization
+            question_format: Format of the question input ('full_text', 'relation_only', 'graph_only')
             cached_QAMetaData_path: Path to cached preprocessed QA metadata JSON
             raw_QAData_path: Path to raw QA dataset CSV file
             mode: Initial mode ('train', 'dev', or 'test')
@@ -86,6 +88,7 @@ class QuestionBatcher:
         self.dev_df: pd.DataFrame
         self.test_df: pd.DataFrame
         self.train_metadata: Dict
+        self.question_format: str = question_format
         
         self.train_df, self.dev_df, self.test_df, self.train_metadata = load_qa_data(
             cached_metadata_path=cached_QAMetaData_path,
@@ -217,10 +220,23 @@ class QuestionBatcher:
             batch_idx = np.random.randint(0, len(self.eval_df), size=self.batch_size)
             batch = self.eval_df.iloc[batch_idx]
             
-            # Extract data fields
-            questions: List[str] = batch['Question'].tolist()
             source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)
             answers: np.ndarray = batch['Answer-Entity'].to_numpy(dtype=int)
+
+            # Extract questions based on the specified format
+            if self.question_format == 'full_text':
+                questions: List[List[int]] = batch['Question'].tolist() # already tokenized
+            elif self.question_format == 'relation_only':
+                paths: List[List[List[str, str, str]]] = batch['Paths'].tolist()
+                # extract relation sequences
+                relations_only: List[str] = []
+                for path in paths:
+                    rel_seq = [triple[1] for triple in path]
+                    relations_only.append(" ".join([f"[{rel}]" for rel in self.translate_relations(rel_seq)]))
+                questions: List[List[int]] = self.tokenize_questions(relations_only)
+            else:  # 'graph_only'
+                # add empty questions
+                questions: List[List[int]] = self.tokenize_questions([""] * len(batch)) 
 
             # Generate embeddings via the embedding server
             question_embeddings: np.ndarray = self.embedding_server.embed(
@@ -266,9 +282,23 @@ class QuestionBatcher:
 
             # Extract batch data
             batch = self.eval_df.iloc[batch_idx]
-            questions: List[str] = batch['Question'].tolist()
             source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)
             answers: np.ndarray = batch['Answer-Entity'].to_numpy(dtype=int)
+
+            # Extract questions based on the specified format
+            if self.question_format == 'full_text':
+                questions: List[List[int]] = batch['Question'].tolist() # already tokenized
+            elif self.question_format == 'relation_only':
+                paths: List[List[List[str, str, str]]] = batch['Paths'].tolist()
+                # extract relation sequences
+                relations_only: List[str] = []
+                for path in paths:
+                    rel_seq = [triple[1] for triple in path]
+                    relations_only.append(" ".join([f"[{rel}]" for rel in self.translate_relations(rel_seq)]))
+                questions: List[List[int]] = self.tokenize_questions(relations_only)
+            else:  # 'graph_only'
+                # add empty questions
+                questions: List[List[int]] = self.tokenize_questions([""] * len(batch)) 
 
             # Generate embeddings via the embedding server
             question_embeddings: np.ndarray = self.embedding_server.embed(
@@ -324,4 +354,18 @@ class QuestionBatcher:
         if isinstance(questions[0], str):
             return questions  # Already decoded
         return [self.question_tokenizer.decode(question) for question in questions]
+    
+    def tokenize_questions(self, questions: List[str]) -> List[List[int]]:
+        """
+        Tokenize raw question text into token ID sequences.
+        
+        Args:
+            questions: List of raw question text strings
+            
+        Returns:
+            List of token ID sequences corresponding to the input questions
+        """
+        if isinstance(questions[0], list):
+            return questions  # Already tokenized
+        return [self.question_tokenizer.encode(q, add_special_tokens=False) for q in questions]
     
