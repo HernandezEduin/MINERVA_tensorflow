@@ -235,8 +235,12 @@ class QuestionBatcher:
                     relations_only.append(" ".join([f"[{rel}]" for rel in self.translate_relations(rel_seq)]))
                 questions: List[List[int]] = self.tokenize_questions(relations_only)
             else:  # 'graph_only'
-                # add empty questions
+                # add empty questions and 0 vector embeddings
                 questions: List[List[int]] = self.tokenize_questions([""] * len(batch)) 
+                question_embeddings = np.zeros((len(questions), self.get_embedding_dim()), dtype=np.float32)
+
+                yield questions, question_embeddings, source_ent, answers
+                continue # skip embedding generation
 
             # Generate embeddings via the embedding server
             question_embeddings: np.ndarray = self.embedding_server.embed(
@@ -297,8 +301,12 @@ class QuestionBatcher:
                     relations_only.append(" ".join([f"[{rel}]" for rel in self.translate_relations(rel_seq)]))
                 questions: List[List[int]] = self.tokenize_questions(relations_only)
             else:  # 'graph_only'
-                # add empty questions
+                # add empty questions and 0 vector embeddings
                 questions: List[List[int]] = self.tokenize_questions([""] * len(batch)) 
+                question_embeddings = np.zeros((len(questions), self.get_embedding_dim()), dtype=np.float32)
+
+                yield questions, question_embeddings, source_ent, answers
+                continue # skip embedding generation
 
             # Generate embeddings via the embedding server
             question_embeddings: np.ndarray = self.embedding_server.embed(
