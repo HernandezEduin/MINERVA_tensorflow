@@ -413,8 +413,7 @@ class AgentNLQ(object):
             output = tf.compat.v1.layers.dense(
                 x,
                 self.out_dim,
-                activation=tf.nn.relu, # TODO: remove relu in future experiments
-                # activation=None,
+                activation=None,
                 name="dense"
             )
             
