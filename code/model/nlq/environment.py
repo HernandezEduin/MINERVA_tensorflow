@@ -145,8 +145,7 @@ class EpisodeNLQ(object):
         # Repeat entities/embeddings for multiple rollouts per question [batch_size,] -> [batch_size * num_rollouts]
         start_entities = np.repeat(start_entities, self.num_rollouts)
         # either [batch_size * num_rollouts] or [batch_size, variable_num_answers]
-        # end_entities  = np.repeat(end_entities, self.num_rollouts) if not self.multi_answers else [sublist[:] for sublist in end_entities for _ in range(self.num_rollouts)]
-        end_entities  = np.repeat(end_entities, self.num_rollouts) if not self.multi_answers else end_entities
+        end_entities  = np.repeat(end_entities, self.num_rollouts) if not self.multi_answers else [set(sublist) for sublist in end_entities] # faster lookup with set
         self.start_entities = start_entities
         self.end_entities = end_entities
         self.current_entities = np.array(start_entities)
@@ -229,7 +228,6 @@ class EpisodeNLQ(object):
             # if any of the answers in the list match current entity, give positive reward (following literature convention)
             reward = np.array([
                 self.positive_reward if self.current_entities[i] in self.end_entities[i // self.num_rollouts]  # use this if repeating end_entities per rollout
-                # self.positive_reward if self.current_entities[i] in self.end_entities[i] 
                 else self.negative_reward 
                 for i in range(self.current_entities.shape[0])
             ])
