@@ -237,6 +237,25 @@ class EpisodeNLQ(object):
             choicelist = [self.positive_reward, self.negative_reward]
             reward = np.select(condlist, choicelist)
         return reward
+    
+    def get_multi_answer_coverage(self) -> np.ndarray:
+        recall = np.zeros(self.no_examples, dtype=np.float32)
+        precision = np.zeros(self.no_examples, dtype=np.float32)
+        f1_score = np.zeros(self.no_examples, dtype=np.float32)
+
+        if self.multi_answers:
+            for i0 in range(self.no_examples):
+                rollout_ends = self.current_entities[i0*self.num_rollouts:(i0+1)*self.num_rollouts]
+                current_answers = set(rollout_ends)          # unique predicted endpoints
+                correct_answers = self.end_entities[i0]      # set of gold endpoints
+
+                tp = len(current_answers & correct_answers)
+
+                recall[i0] = tp / (len(correct_answers) + 1e-8)  # unique answer coverage (recall)
+                precision[i0] = tp / (len(current_answers) + 1e-8)
+                f1_score[i0] = 2 * tp / (len(current_answers) + len(correct_answers) + 1e-8)
+
+        return recall, precision, f1_score
 
     def __call__(self, action: np.ndarray) -> Dict[str, np.ndarray]:
         """

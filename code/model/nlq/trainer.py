@@ -720,7 +720,7 @@ class TrainerNLQ(object):
                 with open(os.path.join(self.output_dir, 'scores.txt'), 'a') as score_file:
                     score_file.write("Score for iteration " + str(self.batch_counter) + "\n")
 
-                _, _, _, _, _, _, dev_hits, dev_mrr = self.test(
+                _, _, _, _, _, _, dev_hits, dev_mrr, _, _, _ = self.test(
                     sess, 
                     beam=self.use_beam, 
                     print_paths=False, 
@@ -795,6 +795,9 @@ class TrainerNLQ(object):
         all_final_reward_5 = 0          # Overall results for hits@5
         all_final_reward_10 = 0         # Overall results for hits@10
         all_final_reward_20 = 0         # Overall results for hits@20
+        all_final_recall = 0
+        all_final_precision = 0
+        all_final_f1 = 0
         mrr = 0                         # Overall results for MRR
 
         # Changing the environment to test/dev data and resetting values
@@ -926,6 +929,12 @@ class TrainerNLQ(object):
             reward_reshape = np.reshape(rewards, (temp_batch_size, self.test_rollouts))  # [orig_batch, test_rollouts]
             self.log_probs = np.reshape(self.log_probs, (temp_batch_size, self.test_rollouts))
             sorted_indx = np.argsort(-self.log_probs)
+
+            if self.multi_answers:
+                recall, precision, f1_score = episode.get_multi_answer_coverage()
+                all_final_recall += recall.sum()
+                all_final_precision += precision.sum()
+                all_final_f1 += f1_score.sum()
             
             # Calculate the episode's metrics based on the sorted indices
             final_reward_1 = 0
@@ -1031,6 +1040,11 @@ class TrainerNLQ(object):
         all_final_reward_20 /= total_examples
         mrr /= total_examples
 
+        if self.multi_answers:
+            all_final_recall /= total_examples
+            all_final_precision /= total_examples
+            all_final_f1 /= total_examples
+
         # Save best performing model based on hits@1
         if save_model:
             # if a better hits at one is found, save model
@@ -1076,6 +1090,13 @@ class TrainerNLQ(object):
             score_file.write(f"Hits@20: {all_final_reward_20:7.4f}")
             score_file.write("\n")
             score_file.write(f"MRR: {mrr:7.4f}")
+            if self.multi_answers:
+                score_file.write("\n")
+                score_file.write(f"Recall: {all_final_recall:7.4f}")
+                score_file.write("\n")
+                score_file.write(f"Precision: {all_final_precision:7.4f}")
+                score_file.write("\n")
+                score_file.write(f"F1 Score: {all_final_f1:7.4f}")
             score_file.write("\n")
             score_file.write("\n") 
 
@@ -1085,6 +1106,10 @@ class TrainerNLQ(object):
         logger.info(f"Hits@10: {all_final_reward_10:7.4f}")
         logger.info(f"Hits@20: {all_final_reward_20:7.4f}")
         logger.info(f"MRR: {mrr:7.4f}")
+        if self.multi_answers:
+            logger.info(f"Recall: {all_final_recall:7.4f}")
+            logger.info(f"Precision: {all_final_precision:7.4f}")
+            logger.info(f"F1 Score: {all_final_f1:7.4f}")
 
         # Log evaluation metrics to WANDB
         if self.use_wandb:
@@ -1099,6 +1124,9 @@ class TrainerNLQ(object):
                     f'{mode}/hits@10': float(all_final_reward_10),
                     f'{mode}/hits@20': float(all_final_reward_20),
                     f'{mode}/mrr': float(mrr),
+                    f'{mode}/recall': float(all_final_recall) if self.multi_answers else None,
+                    f'{mode}/precision': float(all_final_precision) if self.multi_answers else None,
+                    f'{mode}/f1_score': float(all_final_f1) if self.multi_answers else None,
                     f'{mode}/total_examples': int(total_examples)
                 })  # Let WANDB auto-assign step for evaluation metrics
                 logger.info(f"Successfully logged {mode} metrics to WANDB")
@@ -1108,7 +1136,7 @@ class TrainerNLQ(object):
         else:
             logger.info(f"WANDB logging disabled for {mode} evaluation")
 
-        return all_final_reward_1, all_final_reward_3, all_final_reward_5, all_final_reward_10, all_final_reward_20, mrr, max_hits, max_mrr
+        return all_final_reward_1, all_final_reward_3, all_final_reward_5, all_final_reward_10, all_final_reward_20, mrr, max_hits, max_mrr, all_final_recall, all_final_precision, all_final_f1
 
     def predict(self, sess: tf.compat.v1.Session, beam: bool = False, mode: str = 'dev'):
         paths = defaultdict(list)       # Store paths for each question if print_paths is True
@@ -1259,6 +1287,8 @@ class TrainerNLQ(object):
                 r = sorted_indx[b][0] # highest scoring path
                 indx = b * self.test_rollouts + r           # Convert to global index
                 paths[question_txt].append(f"Agent Ans: {str(self.environment.batcher.translate_entities([ce[b, r]])[0])}\n")
+
+                paths[question_txt].append(f"Path Score: {-self.log_probs[b, r]}\n")
 
                 entities_path = [str(self.environment.batcher.translate_entities([e[indx]])[0]) for e in self.entity_trajectory]
                 relations_path = [str(self.environment.batcher.translate_relations([re[indx]])[0]) for re in self.relation_trajectory]
