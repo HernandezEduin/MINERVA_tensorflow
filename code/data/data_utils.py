@@ -111,6 +111,7 @@ def process_and_cache_triviaqa_data(
     question_tokenizer: PreTrainedTokenizer,
     entity2id: Dict[str, int],
     relation2id: Dict[str, int],
+    multi_answers: bool = False,
     seed: Optional[int] = None,
     override_split: bool = True,
     logger: Optional[logging.Logger] = None,
@@ -136,6 +137,7 @@ def process_and_cache_triviaqa_data(
         question_tokenizer: HuggingFace tokenizer for question text processing
         entity2id: Mapping from entity names to integer IDs
         relation2id: Mapping from relation names to integer IDs
+        multi_answers: Whether to handle multiple answers per question
         seed: Optional seed for random number generation
         override_split: If True, use SplitLabel column for splitting when available
         logger: Optional logger for progress tracking and warnings
@@ -167,7 +169,9 @@ def process_and_cache_triviaqa_data(
     # Extract required columns
     questions = csv_df["Question"]
     source_ent = csv_df["Source-Entity"] 
-    answer_ent = csv_df["Answer-Entity"]
+    answer_ent = csv_df["Answer-Entity"] if not multi_answers else extract_literals(
+        csv_df["Answer-Entity"], flatten=False
+    )
     
     # Extract optional columns
     paths = extract_literals(csv_df["Paths"]) if 'Paths' in csv_df.columns else None
@@ -185,7 +189,9 @@ def process_and_cache_triviaqa_data(
 
     # Map entities and relations to integer IDs
     mapped_source_ent = source_ent.map(lambda ent: entity2id[ent])
-    mapped_answer_ent = answer_ent.map(lambda ent: entity2id[ent])
+    mapped_answer_ent = answer_ent.map(lambda ent: entity2id[ent]) if not multi_answers else answer_ent.map(
+        lambda ans_list: [entity2id[ans] for ans in ans_list]
+    )
     if paths is not None:
         mapped_paths = paths.map(
             lambda path: [
@@ -292,7 +298,8 @@ def load_qa_data(
     raw_QAData_path: str,
     question_tokenizer_name: str,
     entity2id: Dict[str, int],
-    relation2id: Dict[str, int], 
+    relation2id: Dict[str, int],
+    multi_answers: bool = False,
     seed: Optional[int] = None,
     logger: Optional[logging.Logger] = None,
     force_recompute: bool = False,
@@ -365,6 +372,7 @@ def load_qa_data(
             question_tokenizer,
             entity2id,
             relation2id,
+            multi_answers=multi_answers,
             seed=seed,
             override_split=override_split,
             logger=logger,

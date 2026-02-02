@@ -51,6 +51,7 @@ class QuestionBatcher:
         cached_QAMetaData_path: str,
         raw_QAData_path: str,
         mode: str = "train",
+        multi_answers: bool = False,
         seed: Optional[int] = None,
         force_data_prepro: bool = False,
         embedding_server: Optional[EmbeddingServer] = None,
@@ -66,6 +67,7 @@ class QuestionBatcher:
             cached_QAMetaData_path: Path to cached preprocessed QA metadata JSON
             raw_QAData_path: Path to raw QA dataset CSV file
             mode: Initial mode ('train', 'dev', or 'test')
+            multi_answers: Whether to handle multiple answers per question
             seed: Optional seed for random number generation
             force_data_prepro: Whether to force reprocessing of cached data
             embedding_server: Optional pre-initialized embedding server
@@ -89,10 +91,12 @@ class QuestionBatcher:
         self.test_df: pd.DataFrame
         self.train_metadata: Dict
         self.question_format: str = question_format
+        self.multi_answers: bool = multi_answers
         
         self.train_df, self.dev_df, self.test_df, self.train_metadata = load_qa_data(
             cached_metadata_path=cached_QAMetaData_path,
             raw_QAData_path=raw_QAData_path,
+            multi_answers=multi_answers,
             question_tokenizer_name=question_tokenizer_name,
             entity2id=ent2id,
             relation2id=rel2id,
@@ -197,7 +201,7 @@ class QuestionBatcher:
         """
         return len(self.eval_df)
 
-    def yield_next_batch_train(self) -> Generator[Tuple[List[str], np.ndarray, np.ndarray, np.ndarray], None, None]:
+    def yield_next_batch_train(self) -> Generator[Tuple[List[str], Union[np.ndarray, List[List[int]]], np.ndarray, np.ndarray], None, None]:
         """
         Generate infinite training batches with random sampling.
         
@@ -209,7 +213,7 @@ class QuestionBatcher:
                 - questions (List[str]): Raw question text strings
                 - question_embeddings (np.ndarray): Question embeddings [batch_size, embedding_dim]
                 - source_ent (np.ndarray): Source entity IDs [batch_size]
-                - answers (np.ndarray): Answer entity IDs [batch_size]
+                - answers (Union[np.ndarray, List[List[int]]]): Answer(s) entity IDs [batch_size]
                 
         Raises:
             AssertionError: If batcher is not in training mode
@@ -221,7 +225,7 @@ class QuestionBatcher:
             batch = self.eval_df.iloc[batch_idx]
             
             source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)
-            answers: np.ndarray = batch['Answer-Entity'].to_numpy(dtype=int)
+            answers: Union[np.ndarray, List[List[int]]] = batch['Answer-Entity'].to_numpy(dtype=int) if not self.multi_answers else batch['Answer-Entity'].tolist()
 
             # Extract questions based on the specified format
             if self.question_format == 'full_text':
@@ -253,7 +257,7 @@ class QuestionBatcher:
 
             yield questions, question_embeddings, source_ent, answers
 
-    def yield_next_batch_test(self) -> Generator[Tuple[List[str], np.ndarray, np.ndarray, np.ndarray], None, None]:
+    def yield_next_batch_test(self) -> Generator[Tuple[List[str], Union[np.ndarray, List[List[int]]], np.ndarray, np.ndarray], None, None]:
         """
         Generate sequential test/evaluation batches without repetition.
         
@@ -265,7 +269,7 @@ class QuestionBatcher:
                 - questions (List[str]): Raw question text strings
                 - question_embeddings (np.ndarray): Question embeddings [batch_size, embedding_dim]
                 - source_ent (np.ndarray): Source entity IDs [batch_size]
-                - answers (np.ndarray): Answer entity IDs [batch_size]
+                - answers (Union[np.ndarray, List[List[int]]]): Answer entity IDs [batch_size]
         """
         remaining_questions: int = len(self.eval_df)
         current_idx: int = 0
@@ -287,7 +291,7 @@ class QuestionBatcher:
             # Extract batch data
             batch = self.eval_df.iloc[batch_idx]
             source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)
-            answers: np.ndarray = batch['Answer-Entity'].to_numpy(dtype=int)
+            answers: Union[np.ndarray, List[List[int]]] = batch['Answer-Entity'].to_numpy(dtype=int) if not self.multi_answers else batch['Answer-Entity'].tolist()
 
             # Extract questions based on the specified format
             if self.question_format == 'full_text':
@@ -319,7 +323,7 @@ class QuestionBatcher:
 
             yield questions, question_embeddings, source_ent, answers
 
-    def translate_entities(self, entity_ids: np.ndarray) -> List[str]:
+    def translate_entities(self, entity_ids: np.ndarray, dynamic_list: bool = False) -> List[str]:
         """
         Convert entity IDs to their human-readable names.
         
@@ -329,10 +333,19 @@ class QuestionBatcher:
         Returns:
             List of entity names corresponding to the input IDs
         """
-        if self.ent2name:
-            return [self.ent2name.get(self.rev_entity_vocab.get(eid, "Unknown"), "Unknown") for eid in entity_ids]
-        else:
-            return [self.rev_entity_vocab.get(eid, "Unknown") for eid in entity_ids]
+        if dynamic_list: # assume List[List[int]] (multi-answers)
+            result = []
+            for sublist in entity_ids:
+                if self.ent2name:
+                    result.append([self.ent2name.get(self.rev_entity_vocab.get(eid, "Unknown"), "Unknown") for eid in sublist])
+                else:
+                    result.append([self.rev_entity_vocab.get(eid, "Unknown") for eid in sublist])
+            return result
+        else: # assuming np.ndarray
+            if self.ent2name:
+                return [self.ent2name.get(self.rev_entity_vocab.get(eid, "Unknown"), "Unknown") for eid in entity_ids]
+            else:
+                return [self.rev_entity_vocab.get(eid, "Unknown") for eid in entity_ids]
 
     def translate_relations(self, relation_ids: np.ndarray) -> List[str]:
         """

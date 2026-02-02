@@ -36,7 +36,7 @@ from code.data.embedding_server import EmbeddingServer
 from code.data.feed_nlq_data import QuestionBatcher
 from code.data.grapher import RelationEntityGrapher
 
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Union
 
 logger = logging.getLogger()
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
@@ -89,14 +89,15 @@ class EpisodeNLQ(object):
         question_tokens: List[str],
         question_embeddings: np.ndarray,
         start_entities: np.ndarray,
-        end_entities: np.ndarray,
+        end_entities: Union[np.ndarray, List[List[int]]],
         batch_size: int,
         path_len: int,
         num_rollouts: int,
         test_rollouts: int,
         positive_reward: float,
         negative_reward: float,
-        mode: str
+        mode: str,
+        multi_answers: bool = False
     ) -> None:
         """
         Initialize a reinforcement learning episode for knowledge graph reasoning.
@@ -133,6 +134,7 @@ class EpisodeNLQ(object):
             self.num_rollouts = num_rollouts
         else:
             self.num_rollouts = test_rollouts
+        self.multi_answers = multi_answers
 
         self.current_hop = 0
         self.no_examples = start_entities.shape[0]
@@ -142,7 +144,9 @@ class EpisodeNLQ(object):
 
         # Repeat entities/embeddings for multiple rollouts per question [batch_size,] -> [batch_size * num_rollouts]
         start_entities = np.repeat(start_entities, self.num_rollouts)
-        end_entities = np.repeat(end_entities, self.num_rollouts)
+        # either [batch_size * num_rollouts] or [batch_size, variable_num_answers]
+        # end_entities  = np.repeat(end_entities, self.num_rollouts) if not self.multi_answers else [sublist[:] for sublist in end_entities for _ in range(self.num_rollouts)]
+        end_entities  = np.repeat(end_entities, self.num_rollouts) if not self.multi_answers else end_entities
         self.start_entities = start_entities
         self.end_entities = end_entities
         self.current_entities = np.array(start_entities)
@@ -221,10 +225,19 @@ class EpisodeNLQ(object):
             - Negative rewards discourage incorrect reasoning directions
             - Reward values are configured during environment initialization
         """
-        reward = (self.current_entities == self.end_entities)
-        condlist = [reward == True, reward == False]
-        choicelist = [self.positive_reward, self.negative_reward]
-        reward = np.select(condlist, choicelist)
+        if self.multi_answers:
+            # if any of the answers in the list match current entity, give positive reward (following literature convention)
+            reward = np.array([
+                self.positive_reward if self.current_entities[i] in self.end_entities[i // self.num_rollouts]  # use this if repeating end_entities per rollout
+                # self.positive_reward if self.current_entities[i] in self.end_entities[i] 
+                else self.negative_reward 
+                for i in range(self.current_entities.shape[0])
+            ])
+        else:
+            reward = (self.current_entities == self.end_entities)
+            condlist = [reward == True, reward == False]
+            choicelist = [self.positive_reward, self.negative_reward]
+            reward = np.select(condlist, choicelist)
         return reward
 
     def __call__(self, action: np.ndarray) -> Dict[str, np.ndarray]:
@@ -311,6 +324,7 @@ class EnvNLQ(object):
         entity_vocab: Dict[str, int], 
         relation_vocab: Dict[str, int], 
         mode: str = 'train', 
+        multi_answers: bool = False,
         use_full_graph: bool = False,
         seed: Optional[int] = None,
         embedding_server: Optional[EmbeddingServer] = None
@@ -355,6 +369,7 @@ class EnvNLQ(object):
         self.mode = mode
         self.path_len = path_length
         self.test_rollouts = test_rollouts
+        self.multi_answers = multi_answers
         input_dir = data_input_dir
 
         self.batcher = QuestionBatcher(
@@ -363,6 +378,7 @@ class EnvNLQ(object):
             question_tokenizer_name=question_tokenizer_name,
             cached_QAMetaData_path=cached_QAMetaData_path,
             question_format=question_format,
+            multi_answers=multi_answers,
             raw_QAData_path=raw_QAData_path,
             force_data_prepro=False,
             mode=self.mode,
@@ -417,7 +433,8 @@ class EnvNLQ(object):
                     test_rollouts=self.test_rollouts,
                     positive_reward=self.positive_reward,
                     negative_reward=self.negative_reward,
-                    mode=self.mode
+                    mode=self.mode,
+                    multi_answers=self.multi_answers,
                 )
         else:
             for data in self.batcher.yield_next_batch_test():
@@ -436,7 +453,8 @@ class EnvNLQ(object):
                     test_rollouts=self.test_rollouts,
                     positive_reward=self.positive_reward,
                     negative_reward=self.negative_reward,
-                    mode=self.mode
+                    mode=self.mode,
+                    multi_answers=self.multi_answers,
                 )
 
     def change_mode(self, mode: str) -> None:

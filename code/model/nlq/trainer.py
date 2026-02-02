@@ -142,6 +142,7 @@ class TrainerNLQ(object):
         seed: int,
         entity_vocab: Dict[str, int],
         relation_vocab: Dict[str, int],
+        multi_answers: bool = False,
         use_full_graph: bool = False,
         use_beam: Optional[bool] = False,
         embedding_server: Optional[EmbeddingServer] = None,
@@ -213,6 +214,7 @@ class TrainerNLQ(object):
         self.question_format = question_format
         self.cached_QAMetaData_path = cached_QAMetaData_path
         self.raw_QAData_path = raw_QAData_path
+        self.multi_answers = multi_answers
         self.max_num_actions = max_num_actions
         self.embedding_size = embedding_size
         self.hidden_size = hidden_size
@@ -254,6 +256,7 @@ class TrainerNLQ(object):
             question_format=question_format,
             cached_QAMetaData_path=cached_QAMetaData_path,
             raw_QAData_path=raw_QAData_path,
+            multi_answers=multi_answers,
             max_num_actions=max_num_actions,
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab, 
@@ -984,7 +987,10 @@ class TrainerNLQ(object):
                     # Retrive Sample's context
                     question_txt = self.environment.batcher.translate_questions([episode.question_tokens[b]])[0]    # Convert question back to text
                     start_e = self.environment.batcher.translate_entities([episode.start_entities[b * self.test_rollouts]])                 # Map id to entity for source node
-                    end_e = self.environment.batcher.translate_entities([episode.end_entities[b * self.test_rollouts]])                     # Map id to entity for answer node
+                    if self.multi_answers:
+                        end_e = self.environment.batcher.translate_entities([episode.end_entities[b]])                     # Map id to entity for answer node
+                    else:
+                        end_e = self.environment.batcher.translate_entities([episode.end_entities[b * self.test_rollouts]])                     # Map id to entity for answer node
 
                     # Question Header Information
                     paths[question_txt].append(str(start_e) + "\t" + str(end_e) + "\n")
@@ -1240,7 +1246,10 @@ class TrainerNLQ(object):
                 # Retrive Sample's context
                 question_txt = self.environment.batcher.translate_questions([episode.question_tokens[b]])[0]    # Convert question back to text
                 start_e = self.environment.batcher.translate_entities([episode.start_entities[b * self.test_rollouts]])[0]                 # Map id to entity for source node
-                end_e = self.environment.batcher.translate_entities([episode.end_entities[b * self.test_rollouts]])[0]                     # Map id to entity for answer node
+                if self.multi_answers:
+                    end_e = self.environment.batcher.translate_entities([episode.end_entities[b]], dynamic_list=True)                     # Map id to entity for answer node
+                else:
+                    end_e = self.environment.batcher.translate_entities([episode.end_entities[b * self.test_rollouts]])                     # Map id to entity for answer node
 
                 # Question Header Information
                 paths[question_txt].append(question_txt + "\n")
@@ -1358,6 +1367,7 @@ if __name__ == '__main__':
             question_format=options['question_format'],
             cached_QAMetaData_path=options['cached_QAMetaData_path'],
             raw_QAData_path=options['raw_QAData_path'],
+            multi_answers=options['multi_answers'],
             max_num_actions=options['max_num_actions'],
             embedding_size=options['embedding_size'],
             hidden_size=options['hidden_size'],
@@ -1420,6 +1430,7 @@ if __name__ == '__main__':
         question_format=options['question_format'],
         cached_QAMetaData_path=options['cached_QAMetaData_path'],
         raw_QAData_path=options['raw_QAData_path'],
+        multi_answers=options['multi_answers'],
         max_num_actions=options['max_num_actions'],
         embedding_size=options['embedding_size'],
         hidden_size=options['hidden_size'],
