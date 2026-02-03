@@ -32,7 +32,7 @@ import os
 import resource
 import sys
 import time
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 
 import numpy as np
 import tensorflow as tf
@@ -52,6 +52,15 @@ from typing import Dict, Any, List, Tuple, Optional, Union
 
 logger = logging.getLogger()
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+
+EvaluationMetrics = namedtuple('EvaluationMetrics', [
+    'hits_at_1', 'hits_at_3', 'hits_at_5', 'hits_at_10', 'hits_at_20', 
+    'answer_recall', 'answer_precision', 'answer_f1',
+    'path_recall', 'path_precision', 'path_f1',
+    'node_recall', 'node_precision', 'node_f1',
+    'rel_recall', 'rel_precision', 'rel_f1',
+    'mrr', 'max_hits_at_1', 'max_mrr'
+])
 
 class TrainerNLQ(object):
     """
@@ -720,7 +729,7 @@ class TrainerNLQ(object):
                 with open(os.path.join(self.output_dir, 'scores.txt'), 'a') as score_file:
                     score_file.write("Score for iteration " + str(self.batch_counter) + "\n")
 
-                _, _, _, _, _, _, dev_hits, dev_mrr, _, _, _ = self.test(
+                dev_metrics = self.test(
                     sess, 
                     beam=self.use_beam, 
                     print_paths=False, 
@@ -728,6 +737,9 @@ class TrainerNLQ(object):
                     max_hits=dev_hits,
                     max_mrr=dev_mrr,
                 )
+
+                dev_hits = dev_metrics.hits_at_1
+                dev_mrr = dev_metrics.mrr
 
                 # Important: Change back to training mode to change the data
                 self.environment.change_mode('train')
@@ -742,7 +754,7 @@ class TrainerNLQ(object):
 
     def test(self, sess: tf.compat.v1.Session, beam: bool = False, print_paths: bool = False, 
              save_model: bool = True, mode: str = 'dev', max_hits: float = 0, max_mrr: float = 0
-        ) -> Tuple[float, float, float, float, float, float, float, float]:
+        ) -> EvaluationMetrics:
         """
         Evaluate the trained MINERVA agent with comprehensive metrics and optional beam search.
         
@@ -765,15 +777,27 @@ class TrainerNLQ(object):
             mode: Data split to evaluate on ('dev', 'test', or 'train').
                 
         Returns:
-            Tuple of performance metrics:
-                - Hits@1: Fraction with correct answer in top 1 prediction
-                - Hits@3: Fraction with correct answer in top 3 predictions  
-                - Hits@5: Fraction with correct answer in top 5 predictions
-                - Hits@10: Fraction with correct answer in top 10 predictions
-                - Hits@20: Fraction with correct answer in top 20 predictions
-                - MRR: Mean Reciprocal Rank of correct answers
-                - Max Hits@1: Maximum Hits@1 across all rollouts
-                - Max MRR: Maximum MRR across all rollouts
+            EvaluationMetrics: Named tuple containing:
+                - hits_at_1: Hits@1 score 
+                - hits_at_3: Hits@3 score
+                - hits_at_5: Hits@5 score
+                - hits_at_10: Hits@10 score
+                - hits_at_20: Hits@20 score
+                - mrr: Mean Reciprocal Rank score
+                - max_hits: Maximum Hits@1 observed (for model saving)
+                - max_mrr: Maximum MRR observed (for model saving)
+                - answer_recall: Answer-level recall (if multi_answers)
+                - answer_precision: Answer-level precision (if multi_answers)
+                - answer_f1: Answer-level F1 score (if multi_answers)
+                - path_recall: Path-level recall (if paths exist)
+                - path_precision: Path-level precision (if paths exist)
+                - path_f1: Path-level F1 score (if paths exist)
+                - node_recall: Node-level recall (if paths exist)
+                - node_precision: Node-level precision (if paths exist)
+                - node_f1: Node-level F1 score (if paths exist)
+                - rel_recall: Relation-level recall (if paths exist)
+                - rel_precision: Relation-level precision (if paths exist)
+                - rel_f1: Relation-level F1 score (if paths exist)
                 
         Note:
             - Hits@N metrics depend on number of rollouts (capped at rollout count)
@@ -795,9 +819,36 @@ class TrainerNLQ(object):
         all_final_reward_5 = 0          # Overall results for hits@5
         all_final_reward_10 = 0         # Overall results for hits@10
         all_final_reward_20 = 0         # Overall results for hits@20
-        all_final_recall = 0
-        all_final_precision = 0
-        all_final_f1 = 0
+        
+        if self.multi_answers:
+            all_final_answer_recall = 0
+            all_final_answer_precision = 0
+            all_final_answer_f1 = 0
+        else:
+            all_final_answer_recall = None
+            all_final_answer_precision = None
+            all_final_answer_f1 = None
+
+        if self.environment.check_paths_exist():
+            all_final_path_recall = 0
+            all_final_path_precision = 0
+            all_final_path_f1 = 0
+            all_final_node_recall = 0
+            all_final_node_precision = 0
+            all_final_node_f1 = 0
+            all_final_rel_recall = 0
+            all_final_rel_precision = 0
+            all_final_rel_f1 = 0
+        else:
+            all_final_path_recall = None
+            all_final_path_precision = None
+            all_final_path_f1 = None
+            all_final_node_recall = None
+            all_final_node_precision = None
+            all_final_node_f1 = None
+            all_final_rel_recall = None
+            all_final_rel_precision = None
+            all_final_rel_f1 = None
         mrr = 0                         # Overall results for MRR
 
         # Changing the environment to test/dev data and resetting values
@@ -832,7 +883,7 @@ class TrainerNLQ(object):
             }
 
             ####logger code####
-            if print_paths:
+            if print_paths or self.environment.check_paths_exist():
                 self.entity_trajectory = []
                 self.relation_trajectory = []
             ####################
@@ -894,13 +945,13 @@ class TrainerNLQ(object):
                     beam_probs = beam_probs.reshape((-1, 1))
 
                     # Path History Maintenance
-                    if print_paths:
+                    if print_paths or self.environment.check_paths_exist():
                         for j in range(i):
                             self.entity_trajectory[j] = self.entity_trajectory[j][y]
                             self.relation_trajectory[j] = self.relation_trajectory[j][y]
                 
                 ####logger code####
-                if print_paths: # Store the current path before the environment update
+                if print_paths or self.environment.check_paths_exist(): # Store the current path before the environment update
                     self.entity_trajectory.append(state['current_entities'])
                     self.relation_trajectory.append(chosen_relation)
                 ####################
@@ -918,7 +969,7 @@ class TrainerNLQ(object):
                 self.log_probs = beam_probs
 
             ####Logger code####
-            if print_paths: # Store the current paths (entity only)
+            if print_paths or self.environment.check_paths_exist(): # Store the current paths (entity only)
                 self.entity_trajectory.append(state['current_entities'])
 
             # Calculate the final reward
@@ -931,10 +982,10 @@ class TrainerNLQ(object):
             sorted_indx = np.argsort(-self.log_probs)
 
             if self.multi_answers:
-                recall, precision, f1_score = episode.get_multi_answer_coverage()
-                all_final_recall += recall.sum()
-                all_final_precision += precision.sum()
-                all_final_f1 += f1_score.sum()
+                precision, recall, f1_score = episode.get_multi_answer_coverage()
+                all_final_answer_recall += recall.sum()
+                all_final_answer_precision += precision.sum()
+                all_final_answer_f1 += f1_score.sum()
             
             # Calculate the episode's metrics based on the sorted indices
             final_reward_1 = 0
@@ -991,6 +1042,33 @@ class TrainerNLQ(object):
                 else:
                     final_mrr += 0
                 
+                if self.environment.check_paths_exist():   # If path existence checking is enabled
+                    r = sorted_indx[b][0] # highest scoring path
+                    indx = b * self.test_rollouts + r           # Convert to global index
+                    entities_path = [e[indx] for e in self.entity_trajectory]
+                    relations_path = [re[indx] for re in self.relation_trajectory]
+
+                    # pop the first entity which is the source entity
+                    entities_path = entities_path[1:]
+
+                    # merge entities and path into a single path
+                    merged_path = [[r, e] for r, e in zip(relations_path, entities_path)]
+                    precision, recall, f1_score = episode.get_path_faithfulness(merged_path, b)
+                    all_final_path_precision += precision
+                    all_final_path_recall += recall
+                    all_final_path_f1 += f1_score
+
+                    precision, recall, f1_score = episode.get_node_coverage(entities_path, b)
+                    all_final_node_precision += precision
+                    all_final_node_recall += recall
+                    all_final_node_f1 += f1_score
+
+                    precision, recall, f1_score = episode.get_relation_coverage(relations_path, b)
+                    all_final_rel_precision += precision
+
+                    all_final_rel_recall += recall
+                    all_final_rel_f1 += f1_score
+
                 # Comprehensive reasoning path report
                 if print_paths:
                     # Retrive Sample's context
@@ -1041,9 +1119,22 @@ class TrainerNLQ(object):
         mrr /= total_examples
 
         if self.multi_answers:
-            all_final_recall /= total_examples
-            all_final_precision /= total_examples
-            all_final_f1 /= total_examples
+            all_final_answer_recall /= total_examples
+            all_final_answer_precision /= total_examples
+            all_final_answer_f1 /= total_examples
+        
+        if self.environment.check_paths_exist():
+            all_final_path_recall /= total_examples
+            all_final_path_precision /= total_examples
+            all_final_path_f1 /= total_examples
+
+            all_final_node_recall /= total_examples
+            all_final_node_precision /= total_examples
+            all_final_node_f1 /= total_examples
+
+            all_final_rel_recall /= total_examples
+            all_final_rel_precision /= total_examples
+            all_final_rel_f1 /= total_examples
 
         # Save best performing model based on hits@1
         if save_model:
@@ -1079,37 +1170,65 @@ class TrainerNLQ(object):
                     answer_file.write(a)
 
         with open(os.path.join(self.output_dir, 'scores.txt'), 'a') as score_file:
-            score_file.write(f"Hits@1: {all_final_reward_1:7.4f}")
-            score_file.write("\n")
-            score_file.write(f"Hits@3: {all_final_reward_3:7.4f}")
-            score_file.write("\n")
-            score_file.write(f"Hits@5: {all_final_reward_5:7.4f}")
-            score_file.write("\n")
-            score_file.write(f"Hits@10: {all_final_reward_10:7.4f}")
-            score_file.write("\n")
-            score_file.write(f"Hits@20: {all_final_reward_20:7.4f}")
-            score_file.write("\n")
-            score_file.write(f"MRR: {mrr:7.4f}")
+            score_file.write("Answer Metrics\n")
+            score_file.write(f"\tHits@1: {all_final_reward_1:7.4f}\n")
+            score_file.write(f"\tHits@3: {all_final_reward_3:7.4f}\n")
+            score_file.write(f"\tHits@5: {all_final_reward_5:7.4f}\n")
+            score_file.write(f"\tHits@10: {all_final_reward_10:7.4f}\n")
+            score_file.write(f"\tHits@20: {all_final_reward_20:7.4f}\n")
+            score_file.write(f"\tMRR: {mrr:7.4f}\n")
             if self.multi_answers:
-                score_file.write("\n")
-                score_file.write(f"Recall: {all_final_recall:7.4f}")
-                score_file.write("\n")
-                score_file.write(f"Precision: {all_final_precision:7.4f}")
-                score_file.write("\n")
-                score_file.write(f"F1 Score: {all_final_f1:7.4f}")
-            score_file.write("\n")
+                score_file.write(f"Multi-Answer Metrics\n")
+                score_file.write(f"\tRecall: {all_final_answer_recall:7.4f}\n")
+                score_file.write(f"\tPrecision: {all_final_answer_precision:7.4f}\n")
+                score_file.write(f"\tF1 Score: {all_final_answer_f1:7.4f}\n")
+            if self.environment.check_paths_exist():
+                score_file.write(f"Path Faithfulness Metrics\n")
+                score_file.write(f"\tPath Recall: {all_final_path_recall:7.4f}\n")
+                score_file.write(f"\tPath Precision: {all_final_path_precision:7.4f}\n")
+                score_file.write(f"\tPath F1 Score: {all_final_path_f1:7.4f}\n")
+
+                score_file.write(f"Node Coverage Metrics\n")
+                score_file.write(f"\tNode Recall: {all_final_node_recall:7.4f}\n")
+                score_file.write(f"\tNode Precision: {all_final_node_precision:7.4f}\n")
+                score_file.write(f"\tNode F1 Score: {all_final_node_f1:7.4f}\n")
+
+                score_file.write(f"Relation Coverage Metrics\n")
+                score_file.write(f"\tRelation Recall: {all_final_rel_recall:7.4f}\n")
+                score_file.write(f"\tRelation Precision: {all_final_rel_precision:7.4f}\n")
+                score_file.write(f"\tRelation F1 Score: {all_final_rel_f1:7.4f}\n")
+
             score_file.write("\n") 
 
-        logger.info(f"Hits@1: {all_final_reward_1:7.4f}")
-        logger.info(f"Hits@3: {all_final_reward_3:7.4f}")
-        logger.info(f"Hits@5: {all_final_reward_5:7.4f}")
-        logger.info(f"Hits@10: {all_final_reward_10:7.4f}")
-        logger.info(f"Hits@20: {all_final_reward_20:7.4f}")
-        logger.info(f"MRR: {mrr:7.4f}")
+        logger.info("Answer Metrics:")
+        logger.info(f"\tHits@1: {all_final_reward_1:7.4f}")
+        logger.info(f"\tHits@3: {all_final_reward_3:7.4f}")
+        logger.info(f"\tHits@5: {all_final_reward_5:7.4f}")
+        logger.info(f"\tHits@10: {all_final_reward_10:7.4f}")
+        logger.info(f"\tHits@20: {all_final_reward_20:7.4f}")
+        logger.info(f"\tMRR: {mrr:7.4f}")
         if self.multi_answers:
-            logger.info(f"Recall: {all_final_recall:7.4f}")
-            logger.info(f"Precision: {all_final_precision:7.4f}")
-            logger.info(f"F1 Score: {all_final_f1:7.4f}")
+            logger.info("Multi-Answer Metrics:")
+            logger.info(f"\tRecall: {all_final_answer_recall:7.4f}")
+            logger.info(f"\tPrecision: {all_final_answer_precision:7.4f}")
+            logger.info(f"\tF1 Score: {all_final_answer_f1:7.4f}")
+        if self.environment.check_paths_exist():
+            logger.info("Path Faithfulness Metrics:")
+            logger.info(f"\tPath Recall: {all_final_path_recall:7.4f}")
+            logger.info(f"\tPath Precision: {all_final_path_precision:7.4f}")
+            logger.info(f"\tPath F1 Score: {all_final_path_f1:7.4f}")
+
+            logger.info("Node Coverage Metrics:")
+            logger.info(f"\tNode Recall: {all_final_node_recall:7.4f}")
+            logger.info(f"\tNode Precision: {all_final_node_precision:7.4f}")
+            logger.info(f"\tNode F1 Score: {all_final_node_f1:7.4f}")
+
+            logger.info("Relation Coverage Metrics:")
+            logger.info(f"\tRelation Recall: {all_final_rel_recall:7.4f}")
+            logger.info(f"\tRelation Precision: {all_final_rel_precision:7.4f}")
+            logger.info(f"\tRelation F1 Score: {all_final_rel_f1:7.4f}")
+
+            
 
         # Log evaluation metrics to WANDB
         if self.use_wandb:
@@ -1124,9 +1243,18 @@ class TrainerNLQ(object):
                     f'{mode}/hits@10': float(all_final_reward_10),
                     f'{mode}/hits@20': float(all_final_reward_20),
                     f'{mode}/mrr': float(mrr),
-                    f'{mode}/recall': float(all_final_recall) if self.multi_answers else None,
-                    f'{mode}/precision': float(all_final_precision) if self.multi_answers else None,
-                    f'{mode}/f1_score': float(all_final_f1) if self.multi_answers else None,
+                    f'{mode}/recall': float(all_final_answer_recall) if all_final_answer_recall else None,
+                    f'{mode}/precision': float(all_final_answer_precision) if all_final_answer_precision else None,
+                    f'{mode}/f1_score': float(all_final_answer_f1) if all_final_answer_f1 else None,
+                    f'{mode}/path_recall': float(all_final_path_recall) if all_final_path_recall else None,
+                    f'{mode}/path_precision': float(all_final_path_precision) if all_final_path_precision else None,
+                    f'{mode}/path_f1_score': float(all_final_path_f1) if all_final_path_f1 else None,
+                    f'{mode}/node_recall': float(all_final_node_recall) if all_final_node_recall else None,
+                    f'{mode}/node_precision': float(all_final_node_precision) if all_final_node_precision else None,
+                    f'{mode}/node_f1_score': float(all_final_node_f1) if all_final_node_f1 else None,
+                    f'{mode}/rel_recall': float(all_final_rel_recall) if all_final_rel_recall else None,
+                    f'{mode}/rel_precision': float(all_final_rel_precision) if all_final_rel_precision else None,
+                    f'{mode}/rel_f1_score': float(all_final_rel_f1) if all_final_rel_f1 else None,
                     f'{mode}/total_examples': int(total_examples)
                 })  # Let WANDB auto-assign step for evaluation metrics
                 logger.info(f"Successfully logged {mode} metrics to WANDB")
@@ -1136,7 +1264,28 @@ class TrainerNLQ(object):
         else:
             logger.info(f"WANDB logging disabled for {mode} evaluation")
 
-        return all_final_reward_1, all_final_reward_3, all_final_reward_5, all_final_reward_10, all_final_reward_20, mrr, max_hits, max_mrr, all_final_recall, all_final_precision, all_final_f1
+        return EvaluationMetrics(
+            hits_at_1=all_final_reward_1,
+            hits_at_3=all_final_reward_3,
+            hits_at_5=all_final_reward_5,
+            hits_at_10=all_final_reward_10,
+            hits_at_20=all_final_reward_20,
+            mrr=mrr,
+            max_hits_at_1=max_hits,
+            max_mrr=max_mrr,
+            answer_recall=all_final_answer_recall,
+            answer_precision=all_final_answer_precision,
+            answer_f1=all_final_answer_f1,
+            path_recall=all_final_path_recall,
+            path_precision=all_final_path_precision,
+            path_f1=all_final_path_f1,
+            node_recall=all_final_node_recall,
+            node_precision=all_final_node_precision,
+            node_f1=all_final_node_f1,
+            rel_recall=all_final_rel_recall,
+            rel_precision=all_final_rel_precision,
+            rel_f1=all_final_rel_f1,
+        )
 
     def predict(self, sess: tf.compat.v1.Session, beam: bool = False, mode: str = 'dev'):
         paths = defaultdict(list)       # Store paths for each question if print_paths is True
@@ -1509,6 +1658,7 @@ if __name__ == '__main__':
         # Perform Evaluation
         trainer.test(sess, beam=options['use_beam'], print_paths=options['print_paths'], save_model=False, mode='test')
         if options['print_predictions']:
+            set_seeds(options['seed']) # Ensure reproducibility for predictions
             trainer.predict(sess, beam=options['use_beam'], mode='test')
     
     logging.info(f"Evaluation completed. Closing Server")

@@ -105,6 +105,13 @@ class QuestionBatcher:
             force_recompute=force_data_prepro,
         )
 
+        # check if paths exist in dev/test sets
+        self.path_exists: bool = True
+        for df in [self.dev_df, self.test_df]:
+            if 'Paths' not in df.columns:
+                self.path_exists = False
+                break
+
         # Set initial mode and evaluation dataset
         self.mode: str = mode
         self.eval_df: pd.DataFrame
@@ -226,12 +233,12 @@ class QuestionBatcher:
             
             source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)
             answers: Union[np.ndarray, List[List[int]]] = batch['Answer-Entity'].to_numpy(dtype=int) if not self.multi_answers else batch['Answer-Entity'].tolist()
+            paths: List[List[List[str, str, str]]] = batch['Paths'].tolist() if self.path_exists else None
 
             # Extract questions based on the specified format
             if self.question_format == 'full_text':
                 questions: List[List[int]] = batch['Question'].tolist() # already tokenized
-            elif self.question_format == 'relation_only':
-                paths: List[List[List[str, str, str]]] = batch['Paths'].tolist()
+            elif self.question_format == 'relation_only' and self.path_exists:
                 # extract relation sequences
                 relations_only: List[str] = []
                 for path in paths:
@@ -243,7 +250,7 @@ class QuestionBatcher:
                 questions: List[List[int]] = self.tokenize_questions([""] * len(batch)) 
                 question_embeddings = np.zeros((len(questions), self.get_embedding_dim()), dtype=np.float32)
 
-                yield questions, question_embeddings, source_ent, answers
+                yield questions, question_embeddings, source_ent, answers, paths
                 continue # skip embedding generation
 
             # Generate embeddings via the embedding server
@@ -255,7 +262,7 @@ class QuestionBatcher:
                 max_length=128,
             )
 
-            yield questions, question_embeddings, source_ent, answers
+            yield questions, question_embeddings, source_ent, answers, paths
 
     def yield_next_batch_test(self) -> Generator[Tuple[List[str], Union[np.ndarray, List[List[int]]], np.ndarray, np.ndarray], None, None]:
         """
@@ -292,12 +299,12 @@ class QuestionBatcher:
             batch = self.eval_df.iloc[batch_idx]
             source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)
             answers: Union[np.ndarray, List[List[int]]] = batch['Answer-Entity'].to_numpy(dtype=int) if not self.multi_answers else batch['Answer-Entity'].tolist()
+            paths: List[List[List[str, str, str]]] = batch['Paths'].tolist() if self.path_exists else None
 
             # Extract questions based on the specified format
             if self.question_format == 'full_text':
                 questions: List[List[int]] = batch['Question'].tolist() # already tokenized
             elif self.question_format == 'relation_only':
-                paths: List[List[List[str, str, str]]] = batch['Paths'].tolist()
                 # extract relation sequences
                 relations_only: List[str] = []
                 for path in paths:
@@ -309,7 +316,7 @@ class QuestionBatcher:
                 questions: List[List[int]] = self.tokenize_questions([""] * len(batch)) 
                 question_embeddings = np.zeros((len(questions), self.get_embedding_dim()), dtype=np.float32)
 
-                yield questions, question_embeddings, source_ent, answers
+                yield questions, question_embeddings, source_ent, answers, paths
                 continue # skip embedding generation
 
             # Generate embeddings via the embedding server
@@ -321,7 +328,7 @@ class QuestionBatcher:
                 max_length=128,
             )
 
-            yield questions, question_embeddings, source_ent, answers
+            yield questions, question_embeddings, source_ent, answers, paths
 
     def translate_entities(self, entity_ids: np.ndarray, dynamic_list: bool = False) -> List[str]:
         """

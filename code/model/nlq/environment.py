@@ -36,7 +36,7 @@ from code.data.embedding_server import EmbeddingServer
 from code.data.feed_nlq_data import QuestionBatcher
 from code.data.grapher import RelationEntityGrapher
 
-from typing import Any, Dict, Generator, List, Optional, Union
+from typing import Any, Dict, Generator, List, Optional, Union, Tuple
 
 logger = logging.getLogger()
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
@@ -90,6 +90,7 @@ class EpisodeNLQ(object):
         question_embeddings: np.ndarray,
         start_entities: np.ndarray,
         end_entities: Union[np.ndarray, List[List[int]]],
+        no_op_id: int,
         batch_size: int,
         path_len: int,
         num_rollouts: int,
@@ -97,7 +98,8 @@ class EpisodeNLQ(object):
         positive_reward: float,
         negative_reward: float,
         mode: str,
-        multi_answers: bool = False
+        multi_answers: bool = False,
+        paths: Optional[List[List[List[str]]]] = None,
     ) -> None:
         """
         Initialize a reinforcement learning episode for knowledge graph reasoning.
@@ -120,7 +122,8 @@ class EpisodeNLQ(object):
             positive_reward: Reward for correct answers
             negative_reward: Reward for incorrect answers
             mode: Current mode ('train', 'dev', or 'test')
-                
+            multi_answers: Whether to handle multiple answers per question
+            paths: Optional list of paths for each question
         Note:
             - Creates multiple rollouts by repeating each question/entity
             - Initializes state with available actions from starting positions
@@ -134,8 +137,10 @@ class EpisodeNLQ(object):
             self.num_rollouts = num_rollouts
         else:
             self.num_rollouts = test_rollouts
+        self.no_op_id = no_op_id
         self.multi_answers = multi_answers
-
+        self.paths = paths
+        self.paths_exists = paths is not None
         self.current_hop = 0
         self.no_examples = start_entities.shape[0]
         self.positive_reward = positive_reward
@@ -238,7 +243,19 @@ class EpisodeNLQ(object):
             reward = np.select(condlist, choicelist)
         return reward
     
-    def get_multi_answer_coverage(self) -> np.ndarray:
+    def get_multi_answer_coverage(self) -> Tuple[float, float, float]:
+        """
+        Calculate multi-answer coverage metrics (recall, precision, F1) for the last nodes reached by all rollouts in the current batch.
+        Used to evaluate how well the agent's final positions cover the set of correct answers when multiple answers are possible.
+        Returns:
+            precision: Average precision of predicted answers vs gold answers across the batch
+            recall: Average recall of predicted answers vs gold answers across the batch
+            f1_score: Average F1 score of predicted answers vs gold answers across the batch
+        Note:
+            - Only applicable if multi_answers is True and end_entities are provided as sets of answers
+            - Computes metrics by comparing the unique set of final entities reached by all rollouts for each question against the set of correct answer entities
+            - Provides insight into how well the agent is covering the answer space when multiple correct answers exist
+        """
         recall = np.zeros(self.no_examples, dtype=np.float32)
         precision = np.zeros(self.no_examples, dtype=np.float32)
         f1_score = np.zeros(self.no_examples, dtype=np.float32)
@@ -255,7 +272,83 @@ class EpisodeNLQ(object):
                 precision[i0] = tp / (len(current_answers) + 1e-8)
                 f1_score[i0] = 2 * tp / (len(current_answers) + len(correct_answers) + 1e-8)
 
-        return recall, precision, f1_score
+        return precision, recall, f1_score
+
+    def get_path_faithfulness(self, pred_edges: List[List[int]], idx) -> Tuple[float, float, float]:
+        """
+        Calculate permutation-invariant edge-based Path Faithfulness between
+        predicted and ground-truth path for a given question index. 
+        DO NOT USE AS A REWARD SIGNAL.
+
+        - Edges are (relation, tail) pairs.
+        - No-op transitions (r == no_op_id) are ignored.
+        - Both paths are compared as sets of edges, so order and multiplicity
+        of edges do not affect the score.
+        Returns:
+            precision: Proportion of predicted edges that are in the ground-truth path
+            recall: Proportion of ground-truth edges that are in the predicted path
+            f1_score: Harmonic mean of precision and recall
+        """
+        assert self.paths_exists, "No ground-truth paths available for faithfulness evaluation!"
+        gt_path = self.paths[idx]
+
+        # convert to a set of edges for easier comparison, edge-based
+        pred_edges = set((r, t) for r, t in pred_edges if r != self.no_op_id)  # remove cycles
+        gt_edges = set((r, t) for _, r, t in gt_path)
+
+        tp = len(pred_edges & gt_edges)
+        fp = len(pred_edges - gt_edges)
+        fn = len(gt_edges - pred_edges)
+        precision = tp / (tp + fp + 1e-8)
+        recall = tp / (tp + fn + 1e-8)
+        f1_score = 2 * precision * recall / (precision + recall + 1e-8)
+        return precision, recall, f1_score
+
+
+    def get_node_coverage(self, pred_entities: List[int], idx) -> Tuple[float, float, float]:
+        """
+        Calculate permutation-invariant node-based Path Faithfulness between
+        predicted and ground-truth path for a given question index.
+        """
+
+        assert self.paths_exists, "No ground-truth paths available for faithfulness evaluation!"
+        gt_path = self.paths[idx]
+
+        pred_nodes = set(pred_entities)
+        gt_nodes = set(t for _, _, t in gt_path)
+
+        tp = len(pred_nodes & gt_nodes)
+        fp = len(pred_nodes - gt_nodes)
+        fn = len(gt_nodes - pred_nodes)
+        precision = tp / (tp + fp + 1e-8)
+        recall = tp / (tp + fn + 1e-8)
+        f1_score = 2 * precision * recall / (precision + recall + 1e-8)
+        return precision, recall, f1_score
+
+
+    def get_relation_coverage(self, pred_relations: List[int], idx) -> Tuple[float, float, float]:
+        """
+        Calculate permutation-invariant relation-based Path Faithfulness between
+        predicted and ground-truth path for a given question index.
+        Returns:
+            precision: Proportion of predicted edges that are in the ground-truth path
+            recall: Proportion of ground-truth edges that are in the predicted path
+            f1_score: Harmonic mean of precision and recall
+        """
+        assert self.paths_exists, "No ground-truth paths available for faithfulness evaluation!"
+        gt_path = self.paths[idx]
+
+        pred_rels = set(pred_relations)
+        gt_rels = set(r for _, r, _ in gt_path)
+
+        tp = len(pred_rels & gt_rels)
+        fp = len(pred_rels - gt_rels)
+        fn = len(gt_rels - pred_rels)
+        precision = tp / (tp + fp + 1e-8)
+        recall = tp / (tp + fn + 1e-8)
+        f1_score = 2 * precision * recall / (precision + recall + 1e-8)
+        return precision, recall, f1_score
+
 
     def __call__(self, action: np.ndarray) -> Dict[str, np.ndarray]:
         """
@@ -387,6 +480,7 @@ class EnvNLQ(object):
         self.path_len = path_length
         self.test_rollouts = test_rollouts
         self.multi_answers = multi_answers
+        self.no_op_id = relation_vocab['NO_OP']
         input_dir = data_input_dir
 
         self.batcher = QuestionBatcher(
@@ -402,6 +496,7 @@ class EnvNLQ(object):
             seed=seed,
             embedding_server=embedding_server,
         )
+        self.paths_exists = self.batcher.path_exists
 
         self.total_no_examples = self.batcher.get_question_num()
         self.token_embedding_dim = self.batcher.get_embedding_dim()
@@ -437,13 +532,14 @@ class EnvNLQ(object):
         """
         if self.mode == 'train':
             for data in self.batcher.yield_next_batch_train():
-                question_tokens, question_embeddings, start_entities, end_entities = data
+                question_tokens, question_embeddings, start_entities, end_entities, paths = data
                 yield EpisodeNLQ(
                     self.grapher, 
                     question_tokens,
                     question_embeddings,
                     start_entities,
                     end_entities,
+                    no_op_id=self.no_op_id,
                     batch_size=self.batch_size,
                     path_len=self.path_len,
                     num_rollouts=self.num_rollouts,
@@ -452,18 +548,20 @@ class EnvNLQ(object):
                     negative_reward=self.negative_reward,
                     mode=self.mode,
                     multi_answers=self.multi_answers,
+                    paths=paths,
                 )
         else:
             for data in self.batcher.yield_next_batch_test():
                 if data == None:
                     return
-                question_tokens, question_embeddings, start_entities, end_entities = data
+                question_tokens, question_embeddings, start_entities, end_entities, paths = data
                 yield EpisodeNLQ(
                     self.grapher, 
                     question_tokens,
                     question_embeddings,
                     start_entities,
                     end_entities,
+                    no_op_id=self.no_op_id,
                     batch_size=self.batch_size,
                     path_len=self.path_len,
                     num_rollouts=self.num_rollouts,
@@ -472,6 +570,7 @@ class EnvNLQ(object):
                     negative_reward=self.negative_reward,
                     mode=self.mode,
                     multi_answers=self.multi_answers,
+                    paths=paths,
                 )
 
     def change_mode(self, mode: str) -> None:
@@ -520,3 +619,16 @@ class EnvNLQ(object):
             - Takes effect for subsequent episodes generated after this call
         """
         self.test_rollouts = test_rollouts
+
+    def check_paths_exist(self) -> bool:
+        """
+        Check if ground-truth paths are available for faithfulness evaluation.
+        
+        Returns whether the current batch of questions includes ground-truth
+        reasoning paths. This information is used to determine if path-based
+        evaluation metrics can be computed.
+        
+        Returns:
+            True if ground-truth paths are available, False otherwise
+        """
+        return self.paths_exists
