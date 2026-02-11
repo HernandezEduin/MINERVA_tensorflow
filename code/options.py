@@ -5,7 +5,7 @@ import os
 import argparse
 import time
 import json
-import yaml
+from omegaconf import OmegaConf, DictConfig
 
 import wandb
 
@@ -284,21 +284,34 @@ def recurse_til_leaf(d: dict, parent_key: str = "") -> dict:
             return_dict[next_key] = v
     return return_dict
 
-def overload_parse_defaults_with_yaml(yaml_location:str, args: argparse.Namespace) -> argparse.Namespace:
+def overload_parse_defaults_with_yaml(
+    yaml_location:str, 
+    args: argparse.Namespace,
+    resolve: bool = True,
+    ) -> argparse.Namespace:
     # check if the yaml file exists
     if not os.path.exists(yaml_location):
         print(f"Yaml file {yaml_location} does not exist, skipping yaml overload")
         return args
     
-    with open(yaml_location, "r") as f:
-        print(f"Trying to import the yaml file {yaml_location}")
-        yaml_args = yaml.load(f, Loader=yaml.FullLoader)
-        print(f"Imported yaml with keys {yaml_args.keys()}")
-        overloaded_args = recurse_til_leaf(yaml_args)
-        for k, v in overloaded_args.items():
-            if k in args.__dict__:
-                # Change the property not they key
-                setattr(args, k, v)
-            else:
-                raise ValueError(f"Yaml config file {yaml_location} imposes parameter '{k}', however this parameter is not found in args")
+    print(f"Trying to import the yaml file {yaml_location}")
+    ycfg: DictConfig = OmegaConf.load(yaml_location)
+
+    # Optional: flatten nested config like your recurse_til_leaf
+    # If your YAML is already flat, you can skip this.
+    ydict = OmegaConf.to_container(ycfg, resolve=resolve)
+    if not isinstance(ydict, dict):
+        raise ValueError(f"YAML root must be a mapping/dict, got {type(ydict)}")
+
+    print(f"Imported yaml with keys {list(ydict.keys())}")
+
+    # Apply overrides onto argparse args
+    for k, v in ydict.items():
+        if hasattr(args, k):
+            setattr(args, k, v)
+        else:
+            raise ValueError(
+                f"Yaml config file {yaml_location} imposes parameter '{k}', "
+                f"however this parameter is not found in args"
+            )
     return args
