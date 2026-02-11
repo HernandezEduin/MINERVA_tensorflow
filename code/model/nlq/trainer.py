@@ -1067,7 +1067,6 @@ class TrainerNLQ(object):
 
                     precision, recall, f1_score = episode.get_relation_coverage(relations_path, b)
                     all_final_rel_precision += precision
-
                     all_final_rel_recall += recall
                     all_final_rel_f1 += f1_score
 
@@ -1245,18 +1244,18 @@ class TrainerNLQ(object):
                     f'{mode}/hits@10': float(all_final_reward_10),
                     f'{mode}/hits@20': float(all_final_reward_20),
                     f'{mode}/mrr': float(mrr),
-                    f'{mode}/recall': float(all_final_answer_recall) if all_final_answer_recall else None,
-                    f'{mode}/precision': float(all_final_answer_precision) if all_final_answer_precision else None,
-                    f'{mode}/f1_score': float(all_final_answer_f1) if all_final_answer_f1 else None,
-                    f'{mode}/path_recall': float(all_final_path_recall) if all_final_path_recall else None,
-                    f'{mode}/path_precision': float(all_final_path_precision) if all_final_path_precision else None,
-                    f'{mode}/path_f1_score': float(all_final_path_f1) if all_final_path_f1 else None,
-                    f'{mode}/node_recall': float(all_final_node_recall) if all_final_node_recall else None,
-                    f'{mode}/node_precision': float(all_final_node_precision) if all_final_node_precision else None,
-                    f'{mode}/node_f1_score': float(all_final_node_f1) if all_final_node_f1 else None,
-                    f'{mode}/rel_recall': float(all_final_rel_recall) if all_final_rel_recall else None,
-                    f'{mode}/rel_precision': float(all_final_rel_precision) if all_final_rel_precision else None,
-                    f'{mode}/rel_f1_score': float(all_final_rel_f1) if all_final_rel_f1 else None,
+                    f'{mode}/recall': float(all_final_answer_recall) if all_final_answer_recall is not None else None,
+                    f'{mode}/precision': float(all_final_answer_precision) if all_final_answer_precision is not None else None,
+                    f'{mode}/f1_score': float(all_final_answer_f1) if all_final_answer_f1 is not None else None,
+                    f'{mode}/path_recall': float(all_final_path_recall) if all_final_path_recall is not None else None,
+                    f'{mode}/path_precision': float(all_final_path_precision) if all_final_path_precision is not None else None,
+                    f'{mode}/path_f1_score': float(all_final_path_f1) if all_final_path_f1 is not None else None,
+                    f'{mode}/node_recall': float(all_final_node_recall) if all_final_node_recall is not None else None,
+                    f'{mode}/node_precision': float(all_final_node_precision) if all_final_node_precision is not None else None,
+                    f'{mode}/node_f1_score': float(all_final_node_f1) if all_final_node_f1 is not None else None,
+                    f'{mode}/rel_recall': float(all_final_rel_recall) if all_final_rel_recall is not None else None,
+                    f'{mode}/rel_precision': float(all_final_rel_precision) if all_final_rel_precision is not None else None,
+                    f'{mode}/rel_f1_score': float(all_final_rel_f1) if all_final_rel_f1 is not None else None,
                     f'{mode}/total_examples': int(total_examples)
                 })  # Let WANDB auto-assign step for evaluation metrics
                 logger.info(f"Successfully logged {mode} metrics to WANDB")
