@@ -141,6 +141,14 @@ class RelationEntityGrapher:
         self.rev_relation_vocab: Dict[int, str] = {v: k for k, v in relation_vocab.items()}
         self.rev_entity_vocab: Dict[int, str] = {v: k for k, v in entity_vocab.items()}
         
+        # inverse tokens for evaluation purposes (e.g. _relation)
+        self.inverse_tokens = set()
+        self.inverse_mapping = {}        
+        for r, r_id in relation_vocab.items():
+            if r.startswith('_'):
+                self.inverse_tokens.add(r_id)
+                self.inverse_mapping[r_id] = relation_vocab[r[1:]]  # map _relation to relation for evaluation purposes
+
         # Build the graph and action spaces
         self.create_graph()
         logging.info("Knowledge graph constructed successfully")

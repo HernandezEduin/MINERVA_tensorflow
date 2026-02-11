@@ -279,7 +279,7 @@ class EpisodeNLQ(object):
 
         return precision, recall, f1_score
 
-    def get_path_faithfulness(self, pred_edges: List[List[int]], idx) -> Tuple[float, float, float]:
+    def get_path_faithfulness(self, pred_path: List[List[int]], idx) -> Tuple[float, float, float]:
         """
         Calculate permutation-invariant edge-based Path Faithfulness between
         predicted and ground-truth path for a given question index. 
@@ -299,7 +299,11 @@ class EpisodeNLQ(object):
         gt_path = self.paths[idx]
 
         # convert to a set of edges for easier comparison, edge-based
-        pred_edges = set((r, t) for r, t in pred_edges if r not in self.cycle_tokens)  # remove cycles and stop/restart signals
+        pred_edges = set(
+            (self.grapher.inverse_mapping.get(r, r), (h if r in self.grapher.inverse_tokens else t))  # map inverse tokens back to their original relation for evaluation purposes (e.g. _relation -> relation)
+            for h, r, t in pred_path 
+            if r not in self.cycle_tokens   #   remove cycles and stop/restart signals
+        )
         gt_edges = set((r, t) for _, r, t in gt_path)
 
         tp = len(pred_edges & gt_edges)
@@ -321,7 +325,7 @@ class EpisodeNLQ(object):
         gt_path = self.paths[idx]
 
         pred_nodes = set(pred_entities)
-        gt_nodes = set(t for _, _, t in gt_path)
+        gt_nodes = set(t for _, _, t in gt_path) & set(h for h, _, _ in gt_path)  # include start entity from gt path
 
         tp = len(pred_nodes & gt_nodes)
         fp = len(pred_nodes - gt_nodes)
@@ -344,7 +348,11 @@ class EpisodeNLQ(object):
         assert self.paths_exists, "No ground-truth paths available for faithfulness evaluation!"
         gt_path = self.paths[idx]
 
-        pred_rels = set(r for r in pred_relations if r not in self.cycle_tokens)  # remove cycles and stop/restart signals
+        pred_rels = set(
+            self.grapher.inverse_mapping.get(r, r)      # map inverse tokens back to their original relation for evaluation purposes (e.g. _relation -> relation)
+            for r in pred_relations
+            if r not in self.cycle_tokens               #   remove cycles and stop/restart signals
+        )
         gt_rels = set(r for _, r, _ in gt_path)
 
         tp = len(pred_rels & gt_rels)

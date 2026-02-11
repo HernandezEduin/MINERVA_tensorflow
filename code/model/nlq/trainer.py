@@ -1050,11 +1050,11 @@ class TrainerNLQ(object):
                     entities_path = [e[indx] for e in self.entity_trajectory]
                     relations_path = [re[indx] for re in self.relation_trajectory]
 
-                    # pop the first entity which is the source entity
-                    entities_path = entities_path[1:]
+                    # # pop the first entity which is the source entity
+                    # entities_path = entities_path[1:]
 
                     # merge entities and path into a single path
-                    merged_path = [[r, e] for r, e in zip(relations_path, entities_path)]
+                    merged_path = [[h, r, t] for h, r, t in zip(entities_path[:-1], relations_path, entities_path[1:])]
                     precision, recall, f1_score = episode.get_path_faithfulness(merged_path, b)
                     all_final_path_precision += precision
                     all_final_path_recall += recall
