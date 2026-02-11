@@ -90,7 +90,6 @@ class EpisodeNLQ(object):
         question_embeddings: np.ndarray,
         start_entities: np.ndarray,
         end_entities: Union[np.ndarray, List[List[int]]],
-        no_op_id: int,
         batch_size: int,
         path_len: int,
         num_rollouts: int,
@@ -137,7 +136,6 @@ class EpisodeNLQ(object):
             self.num_rollouts = num_rollouts
         else:
             self.num_rollouts = test_rollouts
-        self.no_op_id = no_op_id
         self.multi_answers = multi_answers
         self.paths = paths
         self.paths_exists = paths is not None
@@ -145,7 +143,9 @@ class EpisodeNLQ(object):
         self.no_examples = start_entities.shape[0]
         self.positive_reward = positive_reward
         self.negative_reward = negative_reward
-        self.negative_reward = negative_reward
+        self.use_stop_signal = self.grapher.use_stop_signal
+        self.use_restart_signal = self.grapher.use_restart_signal
+        self.cycle_tokens = set([self.grapher.rNO_OP, self.grapher.rSTOP, self.grapher.rRESTART])  # if using stop/restart signals, we want to ignore them in path faithfulness evaluation since they are not part of the original graph
 
         # Repeat entities/embeddings for multiple rollouts per question [batch_size,] -> [batch_size * num_rollouts]
         start_entities = np.repeat(start_entities, self.num_rollouts)
@@ -157,8 +157,13 @@ class EpisodeNLQ(object):
         self.question_embeddings = np.repeat(question_embeddings, self.num_rollouts, axis=0) # [batch_size * num_rollouts, embedding_dim]
         self.question_tokens = question_tokens
 
+        # Track which rollouts have stopped (if using stop signal) to prevent further transitions, but still allow reward calculation at the end of episode
+        self.stopped_mask = np.zeros(self.current_entities.shape[0], dtype=bool)
+
         # Initialize state with available actions from starting positions
         next_actions = self.grapher.return_next_raw_actions(self.current_entities)
+
+        if self.use_restart_signal: next_actions = self.process_restart_actions(next_actions)
 
         self.state = {}                                                         # RL states (next_relations, next_entities, current_entities)
         self.state['next_relations'] = next_actions[:, :, 1]
@@ -281,7 +286,8 @@ class EpisodeNLQ(object):
         DO NOT USE AS A REWARD SIGNAL.
 
         - Edges are (relation, tail) pairs.
-        - No-op transitions (r == no_op_id) are ignored.
+        - No-op, restarts, and stop signals are ignored in the evaluation since they are not part of 
+            the original graph and do not represent meaningful reasoning steps.
         - Both paths are compared as sets of edges, so order and multiplicity
         of edges do not affect the score.
         Returns:
@@ -293,7 +299,7 @@ class EpisodeNLQ(object):
         gt_path = self.paths[idx]
 
         # convert to a set of edges for easier comparison, edge-based
-        pred_edges = set((r, t) for r, t in pred_edges if r != self.no_op_id)  # remove cycles
+        pred_edges = set((r, t) for r, t in pred_edges if r not in self.cycle_tokens)  # remove cycles and stop/restart signals
         gt_edges = set((r, t) for _, r, t in gt_path)
 
         tp = len(pred_edges & gt_edges)
@@ -338,7 +344,7 @@ class EpisodeNLQ(object):
         assert self.paths_exists, "No ground-truth paths available for faithfulness evaluation!"
         gt_path = self.paths[idx]
 
-        pred_rels = set(pred_relations)
+        pred_rels = set(r for r in pred_relations if r not in self.cycle_tokens)  # remove cycles and stop/restart signals
         gt_rels = set(r for _, r, _ in gt_path)
 
         tp = len(pred_rels & gt_rels)
@@ -349,6 +355,48 @@ class EpisodeNLQ(object):
         f1_score = 2 * precision * recall / (precision + recall + 1e-8)
         return precision, recall, f1_score
 
+    def process_restart_actions(self, next_actions: np.ndarray) -> np.ndarray:
+        """
+        If using a RESTART signal, we want to ensure that when an agent selects the RESTART action, it transitions back to the start entity in the next step.
+        This function modifies the next_actions array to enforce this constraint based on the restart_mask. If stop signal is used, the restart action will disappear for stopped agents,
+        so we only apply the restart logic to non-stopped agents.
+
+        Args:
+            next_actions: The original next actions array [total_rollouts, max_actions, 2] containing entity and relation IDs for each possible action
+        Returns:
+            Modified next_actions array where the RESTART action leads back to the start entity for that agent.
+        """
+        restart_mask = (next_actions[:, :, 1] == self.grapher.rRESTART) # Mask to identify which actions are RESTART actions
+        
+        if not np.any(restart_mask):
+            return next_actions  # No RESTART actions, return original next_actions
+        
+        rollout_idx, action_idx = np.where(restart_mask) # Get indices of RESTART actions (not all agents may have a RESTART action, so we check if any exist first)
+
+        next_actions[rollout_idx, action_idx, 0] = self.start_entities[rollout_idx] # Set the next entity for RESTART actions to the start entity for that rollout
+        return next_actions
+    
+    def process_stop_actions(self, next_actions: np.ndarray) -> np.ndarray:
+        """
+        If using a STOP signal, we want to ensure that once an agent selects the STOP action,
+        it cannot transition to any new entity in subsequent steps.
+            - We can achieve this by masking out all other actions except the STOP action for that agent in future steps.
+        
+        This function modifies the next_actions array to enforce this constraint based on the stopped_mask.
+        
+        Args:
+            next_actions: The original next actions array [total_rollouts, max_actions, 2] containing entity and relation IDs for each possible action
+        
+        Returns:
+            Modified next_actions array where agents that have selected STOP can only select the STOP action (which keeps them at the same entity) and all other actions are masked out.
+        """
+        for i0 in range(len(self.stopped_mask)):
+            if self.stopped_mask[i0]:
+                next_actions[i0, :, 0] = self.current_entities[i0]      # Stay at current entity
+                next_actions[i0, :, 1] = self.grapher.rPAD              # Mask everything
+                next_actions[i0, 0, 0] = self.current_entities[i0]      # Except STOP
+                next_actions[i0, 0, 1] = self.grapher.rSTOP
+        return next_actions
 
     def __call__(self, action: np.ndarray) -> Dict[str, np.ndarray]:
         """
@@ -377,8 +425,16 @@ class EpisodeNLQ(object):
         self.current_hop += 1
         self.current_entities = self.state['next_entities'][np.arange(self.no_examples*self.num_rollouts), action]
 
+        if self.use_stop_signal: 
+            selected_relations = self.state['next_relations'][np.arange(self.no_examples*self.num_rollouts), action]
+            self.stopped_mask = np.logical_or(self.stopped_mask, selected_relations == self.grapher.rSTOP)
+
         # Update state with new actions from new positions
         next_actions = self.grapher.return_next_raw_actions(self.current_entities)
+
+        if self.use_stop_signal: next_actions = self.process_stop_actions(next_actions)            
+        if self.use_restart_signal: next_actions = self.process_restart_actions(next_actions)
+
         self.state['next_relations'] = next_actions[:, :, 1]
         self.state['next_entities'] = next_actions[:, :, 0]
         self.state['current_entities'] = self.current_entities
@@ -436,6 +492,8 @@ class EnvNLQ(object):
         mode: str = 'train', 
         multi_answers: bool = False,
         use_full_graph: bool = False,
+        use_stop_signal: bool = False,
+        use_restart_signal: bool = False,
         seed: Optional[int] = None,
         embedding_server: Optional[EmbeddingServer] = None
     ) -> None:
@@ -462,6 +520,10 @@ class EnvNLQ(object):
             entity_vocab: Mapping from entity names to unique integer IDs
             relation_vocab: Mapping from relation names to unique integer IDs  
             mode: Operation mode - 'train' for training, 'dev'/'test' for evaluation
+            multi_answers: Whether to handle questions with multiple correct answers
+            use_full_graph: Whether to use the full graph (including test/dev triples) or only training graph
+            use_stop_signal: Whether to include a STOP action in the action space
+            use_restart_signal: Whether to include a RESTART action in the action space
             seed: Optional seed for random number generation
             embedding_server: Optional service for generating question embeddings
                              from natural language text
@@ -504,10 +566,14 @@ class EnvNLQ(object):
         graph_path = os.path.join(input_dir, 'full_graph.txt') if use_full_graph else os.path.join(input_dir, 'graph.txt')
 
         # Initialize the knowledge graph
-        self.grapher = RelationEntityGrapher(triple_store=graph_path,
-                                             max_num_actions=max_num_actions,
-                                             entity_vocab=entity_vocab,
-                                             relation_vocab=relation_vocab)
+        self.grapher = RelationEntityGrapher(
+            triple_store=graph_path,
+            max_num_actions=max_num_actions,
+            entity_vocab=entity_vocab,
+            relation_vocab=relation_vocab,
+            use_stop_signal=use_stop_signal,
+            use_restart_signal=use_restart_signal
+        )
 
     def get_episodes(self) -> Generator[EpisodeNLQ, None, None]:
         """
@@ -539,7 +605,6 @@ class EnvNLQ(object):
                     question_embeddings,
                     start_entities,
                     end_entities,
-                    no_op_id=self.no_op_id,
                     batch_size=self.batch_size,
                     path_len=self.path_len,
                     num_rollouts=self.num_rollouts,
@@ -561,7 +626,6 @@ class EnvNLQ(object):
                     question_embeddings,
                     start_entities,
                     end_entities,
-                    no_op_id=self.no_op_id,
                     batch_size=self.batch_size,
                     path_len=self.path_len,
                     num_rollouts=self.num_rollouts,

@@ -38,7 +38,9 @@ if __name__ == '__main__':
     entity_vocab['UNK'] = len(entity_vocab)
     relation_vocab['PAD'] = len(relation_vocab)
     relation_vocab['DUMMY_START_RELATION'] = len(relation_vocab)
-    relation_vocab['NO_OP'] = len(relation_vocab)
+    relation_vocab['NO_OP'] = len(relation_vocab)   # Cycle if no-op is used as a relation to stay at the same node
+    relation_vocab['STOP'] = len(relation_vocab)    # Special relation to indicate stop signal for the agent if selected by the policy
+    relation_vocab['RESTART'] = len(relation_vocab) # Special relation to indicate restart signal for the agent if selected by the policy
     relation_vocab['UNK'] = len(relation_vocab)
 
     entity_counter = len(entity_vocab)

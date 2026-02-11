@@ -76,7 +76,9 @@ class RelationEntityGrapher:
         triple_store: str, 
         relation_vocab: Dict[str, int], 
         entity_vocab: Dict[str, int], 
-        max_num_actions: int
+        max_num_actions: int,
+        use_stop_signal: bool = False,
+        use_restart_signal: bool = False
     ) -> None:
         """
         Initialize the knowledge graph from a triple file.
@@ -95,6 +97,8 @@ class RelationEntityGrapher:
                          Must contain 'PAD' special token
             max_num_actions: Maximum number of actions per entity (for padding)
                             Determines the size of the action space array
+            use_stop_signal: Whether to include a STOP action in the action space
+            use_restart_signal: Whether to include a RESTART action in the action space
                             
         Raises:
             KeyError: If required special tokens ('PAD', 'NO_OP') are missing
@@ -111,9 +115,14 @@ class RelationEntityGrapher:
         # Initialize special token IDs and core attributes
         self.ePAD: int = entity_vocab['PAD']    # Padding for invalid entities
         self.rPAD: int = relation_vocab['PAD']  # Padding for invalid relations
+        self.rNO_OP: int = relation_vocab['NO_OP']  # No-op relation ID for self-loop
+        self.rSTOP: int = relation_vocab['STOP']  # Stop action ID
+        self.rRESTART: int = relation_vocab['RESTART']  # Restart action ID
         self.triple_store: str = triple_store
         self.relation_vocab: Dict[str, int] = relation_vocab
         self.entity_vocab: Dict[str, int] = entity_vocab
+        self.use_stop_signal: bool = use_stop_signal
+        self.use_restart_signal: bool = use_restart_signal
         
         # Temporary storage for graph construction
         self.store: defaultdict = defaultdict(list)
@@ -179,8 +188,20 @@ class RelationEntityGrapher:
             action_count = 1
             
             # Action 0: NO_OP self-loop (stay at current entity)
-            self.array_store[entity_id, 0, 1] = self.relation_vocab['NO_OP']
+            self.array_store[entity_id, 0, 1] = self.rNO_OP
             self.array_store[entity_id, 0, 0] = entity_id
+
+            # Action 1: STOP action (optional, can be used to indicate stopping)
+            if self.use_stop_signal:
+                self.array_store[entity_id, action_count, 1] = self.rSTOP
+                self.array_store[entity_id, action_count, 0] = entity_id
+                action_count += 1
+
+            # Action 2: RESTART action (optional, can be used to indicate restarting)
+            if self.use_restart_signal:
+                self.array_store[entity_id, action_count, 1] = self.rRESTART
+                self.array_store[entity_id, action_count, 0] = self.ePAD # must change entity to first action to avoid confusion with NO_OP self loop
+                action_count += 1
             
             # Add all neighboring actions
             for relation, target_entity in self.store[entity_id]:
@@ -195,6 +216,7 @@ class RelationEntityGrapher:
         del self.store
         self.store = None
 
+    # used by query
     def return_next_actions(
         self, 
         current_entities: np.ndarray, 
@@ -278,6 +300,7 @@ class RelationEntityGrapher:
 
         return ret
 
+    # used by nlq
     def return_next_raw_actions(
         self, 
         current_entities: np.ndarray

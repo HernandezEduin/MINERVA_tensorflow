@@ -105,6 +105,10 @@ def read_options() -> Dict[str, Any]:
                         help="Reward value when agent doesn't reach the correct answer")
     parser.add_argument("--gamma", default=1, type=float,
                         help="Discount factor for future rewards in RL (typically 0.9-1.0)")
+    parser.add_argument("--use_stop_signal", default='False', type=str2bool,
+                        help="Whether to include a STOP action in the action space. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
+    parser.add_argument("--use_restart_signal", default='False', type=str2bool,
+                        help="Whether to include a RESTART action in the action space. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
     
     # Training Configuration
     parser.add_argument("--batch_size", default=128, type=int,

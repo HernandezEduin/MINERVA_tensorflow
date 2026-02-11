@@ -79,6 +79,8 @@ if __name__ == '__main__':
         'PAD': 'Padding',
         'UNK': 'Unknown',
         'NO_OP': 'No Operation',
+        'STOP': 'Stop',
+        'RESTART': 'Restart',
         'DUMMY_START_RELATION': 'Dummy Start Relation'
     })
 
