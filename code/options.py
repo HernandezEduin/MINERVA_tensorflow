@@ -155,6 +155,8 @@ def read_options() -> Dict[str, Any]:
                         help='Weights & Biases project name for experiment tracking')
     parser.add_argument('--wandb_name', type=str, default='',
                         help='Custom name for this specific run (optional)')
+    parser.add_argument('--wandb_tags', type=str, nargs='*', default=None,
+                        help='Tags for the Weights & Biases run (optional)')
     parser.add_argument('--track', default='False', type=str2bool,
                         help='Enable Weights & Biases tracking. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)')
     parser.add_argument("--timestamp", type=str, default=None,
@@ -194,7 +196,8 @@ def read_options() -> Dict[str, Any]:
         wandb.init(
             project=parsed['wandb_project'],
             name=run_name,
-            config=parsed
+            config=parsed,
+            tags=parsed['wandb_tags'] if 'wandb_tags' in parsed else None
         )
         
         # Check if we're in a sweep - if so, overwrite parameters with sweep config
