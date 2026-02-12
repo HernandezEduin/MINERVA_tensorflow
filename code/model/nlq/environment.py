@@ -36,7 +36,7 @@ from code.data.embedding_server import EmbeddingServer
 from code.data.feed_nlq_data import QuestionBatcher
 from code.data.grapher import RelationEntityGrapher
 
-from typing import Any, Dict, Generator, List, Optional, Union, Tuple
+from typing import Any, Dict, Generator, List, Optional, Set, Union, Tuple
 
 logger = logging.getLogger()
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
@@ -279,17 +279,39 @@ class EpisodeNLQ(object):
 
         return precision, recall, f1_score
 
-    def get_path_faithfulness(self, pred_path: List[List[int]], idx) -> Tuple[float, float, float]:
+    def canon_edge(self, h: int, r: int, t: int) -> Tuple[int, int, int]:
         """
-        Calculate permutation-invariant edge-based Path Faithfulness between
-        predicted and ground-truth path for a given question index. 
+        Convert an edge to its canonical form (head, relation, tail).
+        If the relation is an inverse token, swap head and tail and map relation back to original.
+        Returns:
+            (h, r, t): Canonical edge representation
+        """
+        if r in self.grapher.inverse_tokens:
+            r = self.grapher.inverse_mapping[r]
+            h, t = t, h
+        return (h, r, t)
+    
+    def is_inverse_rel(self, r_prev: int, r_cur: int) -> bool:
+        # True if r_cur is the inverse token of r_prev OR r_prev is inverse token of r_cur
+        # (assumes inverse_mapping is inverse_token -> base_relation)
+        if r_cur in self.grapher.inverse_tokens and self.grapher.inverse_mapping.get(r_cur) == r_prev:
+            return True
+        if r_prev in self.grapher.inverse_tokens and self.grapher.inverse_mapping.get(r_prev) == r_cur:
+            return True
+        return False
+
+    def get_subgraph_overlap(self, pred_path: List[List[int]], idx) -> Tuple[float, float, float]:
+        """
+        Calculate the subgraph overlap between the predicted path and the ground-truth path for a given question index.
         DO NOT USE AS A REWARD SIGNAL.
 
-        - Edges are (relation, tail) pairs.
+        - Edges are compared in a permutation-invariant way, so the order of edges in the path does not affect the score. 
+            This allows for more flexible evaluation of reasoning paths that may take different orders but still cover 
+            the same underlying subgraph.
         - No-op, restarts, and stop signals are ignored in the evaluation since they are not part of 
             the original graph and do not represent meaningful reasoning steps.
         - Both paths are compared as sets of edges, so order and multiplicity
-        of edges do not affect the score.
+            of edges do not affect the score.
         Returns:
             precision: Proportion of predicted edges that are in the ground-truth path
             recall: Proportion of ground-truth edges that are in the predicted path
@@ -300,11 +322,11 @@ class EpisodeNLQ(object):
 
         # convert to a set of edges for easier comparison, edge-based
         pred_edges = set(
-            (self.grapher.inverse_mapping.get(r, r), (h if r in self.grapher.inverse_tokens else t))  # map inverse tokens back to their original relation for evaluation purposes (e.g. _relation -> relation)
+            self.canon_edge(h, r, t)  # map inverse tokens back to their original relation for evaluation purposes (e.g. _relation -> relation)
             for h, r, t in pred_path 
             if r not in self.cycle_tokens   #   remove cycles and stop/restart signals
         )
-        gt_edges = set((r, t) for _, r, t in gt_path)
+        gt_edges = set((h, r, t) for h, r, t in gt_path)
 
         tp = len(pred_edges & gt_edges)
         fp = len(pred_edges - gt_edges)
@@ -314,6 +336,46 @@ class EpisodeNLQ(object):
         f1_score = 2 * precision * recall / (precision + recall + 1e-8)
         return precision, recall, f1_score
 
+    def get_path_edit_distance(self, pred_path: List[List[int]], idx) -> int:
+        """
+        Calculate the edit distance between the predicted path and the ground-truth path for a given question index.
+        Edit distance is defined as the minimum number of edge insertions, deletions, or substitutions required to transform the predicted path into the ground-truth path.
+        Returns:
+            edit_distance: Integer representing the edit distance between the predicted and ground-truth paths
+        Note:
+            - This is a more strict metric than path faithfulness, as it considers the order and multiplicity of edges.
+            - No-op, restarts, and stop signals are ignored in the evaluation since they are not part of the original graph and do not represent meaningful reasoning steps.
+            - Useful for evaluating how closely the agent's reasoning path matches the exact ground-truth path, but should not be used as a reward signal due to its strictness and potential sparsity.
+        """
+        assert self.paths_exists, "No ground-truth paths available for edit distance evaluation!"
+        gt_path = self.paths[idx]
+
+        # Filter out no-op, restart, and stop signals from both paths
+        pred_path = [self.canon_edge(h, r, t) for h, r, t in pred_path if r not in self.cycle_tokens]
+        gt_path = [(h, r, t) for h, r, t in gt_path]
+
+        # Create a matrix to compute edit distance using dynamic programming
+        m = len(pred_path)
+        n = len(gt_path)
+        dp = np.zeros((m + 1, n + 1), dtype=int)
+
+        for i0 in range(m + 1):
+            dp[i0][0] = i0  # Deletion cost
+        for j0 in range(n + 1):
+            dp[0][j0] = j0  # Insertion cost
+
+        for i0 in range(1, m + 1):
+            for j0 in range(1, n + 1):
+                if pred_path[i0 - 1] == gt_path[j0 - 1]:
+                    dp[i0][j0] = dp[i0 - 1][j0 - 1]  # No cost if edges match
+                else:
+                    dp[i0][j0] = min(
+                        dp[i0 - 1][j0] + 1,    # Deletion
+                        dp[i0][j0 - 1] + 1,    # Insertion
+                        dp[i0 - 1][j0 - 1] + 1 # Substitution
+                    )
+        edit_distance = dp[m][n]
+        return edit_distance/(max(m, n) + 1e-8)  # normalize by path length to get a score between 0 and 1
 
     def get_node_coverage(self, pred_entities: List[int], idx) -> Tuple[float, float, float]:
         """
@@ -325,7 +387,7 @@ class EpisodeNLQ(object):
         gt_path = self.paths[idx]
 
         pred_nodes = set(pred_entities)
-        gt_nodes = set(t for _, _, t in gt_path) & set(h for h, _, _ in gt_path)  # include start entity from gt path
+        gt_nodes = set(t for _, _, t in gt_path) | set(h for h, _, _ in gt_path)  # include start entity from gt path
 
         tp = len(pred_nodes & gt_nodes)
         fp = len(pred_nodes - gt_nodes)
@@ -334,7 +396,6 @@ class EpisodeNLQ(object):
         recall = tp / (tp + fn + 1e-8)
         f1_score = 2 * precision * recall / (precision + recall + 1e-8)
         return precision, recall, f1_score
-
 
     def get_relation_coverage(self, pred_relations: List[int], idx) -> Tuple[float, float, float]:
         """
@@ -362,6 +423,72 @@ class EpisodeNLQ(object):
         recall = tp / (tp + fn + 1e-8)
         f1_score = 2 * precision * recall / (precision + recall + 1e-8)
         return precision, recall, f1_score
+
+    def get_reasoning_diagnostic(self, pred_path: List[List[int]]) -> Tuple[float, float, float, float, float]:
+        """
+        Compute diagnostic metrics for a predicted reasoning path.
+
+        This function evaluates the quality of a predicted reasoning path by calculating the following metrics:
+        
+        - **Invalid Step Rate**: Fraction of steps that are "special" (e.g., restart, stop, no-op) or involve actions that do not correspond to a valid knowledge graph edge.
+        - **Cycle Ratio**: Fraction of steps that revisit an entity already visited in the same rollout.
+        - **Backtrack Ratio**: Fraction of steps that reverse the immediately previous relation (i.e., backtracking).
+        - **Effective Path Length**: Number of unique knowledge graph edges traversed, excluding special tokens.
+        - **Redundancy**: Measures the proportion of redundant edges in the path, calculated as \(1 - \frac{\text{unique\_edges}}{H}\), where \(H\) is the total number of non-invalid steps.
+
+        Args:
+            pred_path (List[List[int]]): The predicted reasoning path, where each step is represented as a tuple (head, relation, tail).
+
+        Returns:
+            Tuple[float, float, float, float, float]: A tuple containing the following diagnostic metrics:
+                - invalid_step_rate (float): Fraction of invalid steps in the path.
+                - cycle_rate (float): Fraction of steps revisiting previously visited entities.
+                - backtrack_rate (float): Fraction of steps that backtrack to the previous entity.
+                - unique_edges (float): Number of unique edges traversed in the path.
+                - redundancy (float): Measure of redundant edges in the path.
+
+        Note:
+            - Special tokens (e.g., NO_OP, STOP, RESTART) are ignored in the calculation of effective path length and redundancy.
+            - These metrics are intended for diagnostic purposes and should not be used as reward signals during training.
+        """
+        invalid_steps = 0
+        cycle_steps = 0
+        backtrack_steps = 0
+        non_invalid_steps = 0
+
+        visited_nodes: Set[int] = {pred_path[0][0]}
+        unique_edge_set: Set[Tuple[int, int, int]] = set()
+
+        for i0, edge in enumerate(pred_path):
+            h, r, t = edge
+
+            # special cycle token (e.g. NO_OP, STOP, RESTART) do not represent meaningful reasoning steps.
+            invalid = r in self.cycle_tokens
+            if invalid:
+                invalid_steps += 1
+                continue
+
+            non_invalid_steps += 1
+
+            # cycle: next node already visited
+            if t in visited_nodes:
+                cycle_steps += 1
+
+            # backtrack: go back to entity_{i-1} via inverse of previous relation
+            if i0 >= 1:
+                if (t == pred_path[i0 - 1][0]) and self.is_inverse_rel(pred_path[i0 - 1][1], r):
+                    backtrack_steps += 1
+
+            visited_nodes.add(t)
+            unique_edge_set.add(self.canon_edge(h, r, t))
+        
+        invalid_step_rate = invalid_steps / (len(pred_path) + 1e-8)
+        cycle_rate = cycle_steps / (non_invalid_steps + 1e-8)
+        backtrack_rate = backtrack_steps / (non_invalid_steps + 1e-8)
+
+        unique_edges = float(len(unique_edge_set))
+        redundancy = 1.0 - (unique_edges / (non_invalid_steps + 1e-8))
+        return invalid_step_rate, cycle_rate, backtrack_rate, unique_edges, redundancy
 
     def process_restart_actions(self, next_actions: np.ndarray) -> np.ndarray:
         """

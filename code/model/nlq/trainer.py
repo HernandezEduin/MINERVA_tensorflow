@@ -59,8 +59,16 @@ EvaluationMetrics = namedtuple('EvaluationMetrics', [
     'path_recall', 'path_precision', 'path_f1',
     'node_recall', 'node_precision', 'node_f1',
     'rel_recall', 'rel_precision', 'rel_f1',
+    'edit_distance',
+    'invalid_step_rate', 'cycle_rate', 'backtrack_rate', 'unique_edges', 'redundancy',
     'mrr', 'max_hits_at_1', 'max_mrr'
 ])
+
+def _as_float(x):
+    return None if x is None else float(x)
+
+def _drop_none(d: dict) -> dict:
+    return {k: v for k, v in d.items() if v is not None}
 
 class TrainerNLQ(object):
     """
@@ -800,6 +808,7 @@ class TrainerNLQ(object):
                 - rel_recall: Relation-level recall (if paths exist)
                 - rel_precision: Relation-level precision (if paths exist)
                 - rel_f1: Relation-level F1 score (if paths exist)
+                - edit_distance: Average edit distance of predicted paths to gold paths (if paths exist)
                 
         Note:
             - Hits@N metrics depend on number of rollouts (capped at rollout count)
@@ -821,6 +830,11 @@ class TrainerNLQ(object):
         all_final_reward_5 = 0          # Overall results for hits@5
         all_final_reward_10 = 0         # Overall results for hits@10
         all_final_reward_20 = 0         # Overall results for hits@20
+        all_final_invalid_step_rate = 0 
+        all_final_cycle_rate = 0
+        all_final_backtrack_rate = 0
+        all_final_unique_edges = 0
+        all_final_redundancy = 0
         
         if self.multi_answers:
             all_final_answer_recall = 0
@@ -841,6 +855,7 @@ class TrainerNLQ(object):
             all_final_rel_recall = 0
             all_final_rel_precision = 0
             all_final_rel_f1 = 0
+            all_edit_distance = 0
         else:
             all_final_path_recall = None
             all_final_path_precision = None
@@ -851,6 +866,7 @@ class TrainerNLQ(object):
             all_final_rel_recall = None
             all_final_rel_precision = None
             all_final_rel_f1 = None
+            all_edit_distance = None
         mrr = 0                         # Overall results for MRR
 
         # Changing the environment to test/dev data and resetting values
@@ -890,7 +906,7 @@ class TrainerNLQ(object):
                 self.relation_trajectory = []
             ####################
 
-            self.log_probs = np.zeros((temp_batch_size*self.test_rollouts,)) * 1.0
+            self.log_probs = np.zeros((temp_batch_size*effective_rollouts,)) * 1.0
 
             # For each hop/step
             for i in range(self.path_length):
@@ -979,8 +995,8 @@ class TrainerNLQ(object):
 
             # Reshape the reward to [orig_batch_size, num_rollouts], to calculate for how many of the
             # entity pair, at least one of the paths arrive at the correct answer
-            reward_reshape = np.reshape(rewards, (temp_batch_size, self.test_rollouts))  # [orig_batch, test_rollouts]
-            self.log_probs = np.reshape(self.log_probs, (temp_batch_size, self.test_rollouts))
+            reward_reshape = np.reshape(rewards, (temp_batch_size, effective_rollouts))  # [orig_batch, test_rollouts]
+            self.log_probs = np.reshape(self.log_probs, (temp_batch_size, effective_rollouts))
             sorted_indx = np.argsort(-self.log_probs)
 
             if self.multi_answers:
@@ -998,8 +1014,8 @@ class TrainerNLQ(object):
             final_mrr = 0
 
             # Get current and start entities
-            ce = episode.state['current_entities'].reshape((temp_batch_size, self.test_rollouts))
-            se = episode.start_entities.reshape((temp_batch_size, self.test_rollouts))
+            ce = episode.state['current_entities'].reshape((temp_batch_size, effective_rollouts))
+            se = episode.start_entities.reshape((temp_batch_size, effective_rollouts))
             
             # Evaluate each sample/question's performance
             for b in range(temp_batch_size):
@@ -1016,6 +1032,7 @@ class TrainerNLQ(object):
                             seen.add(ce[b, r])
                             pos += 1              # increment rank as penalty
                 elif self.pool == 'sum':        # Evaluation done based on all rollouts
+                    # TODO: Fix for multi-answer questions
                     scores = defaultdict(list)
                     answer = ''
                     for r in sorted_indx[b]:
@@ -1044,18 +1061,25 @@ class TrainerNLQ(object):
                 else:
                     final_mrr += 0
                 
+                # Calculate additional metrics
+
+                r = sorted_indx[b][0] # highest scoring path
+                indx = b * effective_rollouts + r           # Convert to global index
+                entities_path = [e[indx] for e in self.entity_trajectory]
+                relations_path = [re[indx] for re in self.relation_trajectory]
+
+                # merge entities and path into a single path
+                merged_path = [[h, r, t] for h, r, t in zip(entities_path[:-1], relations_path, entities_path[1:])]
+
+                invalid_step_rate, cycle_rate, backtrack_rate, unique_edges, redundancy = episode.get_reasoning_diagnostic(merged_path) # Get diagnostics for this episode and path
+                all_final_invalid_step_rate += invalid_step_rate
+                all_final_cycle_rate += cycle_rate
+                all_final_backtrack_rate += backtrack_rate
+                all_final_unique_edges += unique_edges
+                all_final_redundancy += redundancy
+
                 if self.environment.check_paths_exist():   # If path existence checking is enabled
-                    r = sorted_indx[b][0] # highest scoring path
-                    indx = b * self.test_rollouts + r           # Convert to global index
-                    entities_path = [e[indx] for e in self.entity_trajectory]
-                    relations_path = [re[indx] for re in self.relation_trajectory]
-
-                    # # pop the first entity which is the source entity
-                    # entities_path = entities_path[1:]
-
-                    # merge entities and path into a single path
-                    merged_path = [[h, r, t] for h, r, t in zip(entities_path[:-1], relations_path, entities_path[1:])]
-                    precision, recall, f1_score = episode.get_path_faithfulness(merged_path, b)
+                    precision, recall, f1_score = episode.get_subgraph_overlap(merged_path, b)
                     all_final_path_precision += precision
                     all_final_path_recall += recall
                     all_final_path_f1 += f1_score
@@ -1070,6 +1094,7 @@ class TrainerNLQ(object):
                     all_final_rel_recall += recall
                     all_final_rel_f1 += f1_score
 
+                    all_edit_distance += episode.get_path_edit_distance(merged_path, b)
                 # Comprehensive reasoning path report
                 if print_paths:
                     # Retrive Sample's context
@@ -1084,7 +1109,7 @@ class TrainerNLQ(object):
                     paths[question_txt].append(str(start_e) + "\t" + str(end_e) + "\n")
                     paths[question_txt].append("Reward:" + str(1 if answer_pos != None and answer_pos < 10 else 0) + "\n") # Answered correctly if top10
                     for r in sorted_indx[b]:                        # Go through paths sorted by score (highest first)
-                        indx = b * self.test_rollouts + r           # Convert to global index
+                        indx = b * effective_rollouts + r           # Convert to global index
                         if rewards[indx] == self.positive_reward:
                             rev = 1                                 # This path succeeded
                         else:
@@ -1119,6 +1144,12 @@ class TrainerNLQ(object):
         all_final_reward_20 /= total_examples
         mrr /= total_examples
 
+        all_final_invalid_step_rate /= total_examples
+        all_final_cycle_rate /= total_examples
+        all_final_backtrack_rate /= total_examples
+        all_final_unique_edges /= total_examples
+        all_final_redundancy /= total_examples
+
         if self.multi_answers:
             all_final_answer_recall /= total_examples
             all_final_answer_precision /= total_examples
@@ -1136,6 +1167,8 @@ class TrainerNLQ(object):
             all_final_rel_recall /= total_examples
             all_final_rel_precision /= total_examples
             all_final_rel_f1 /= total_examples
+
+            all_edit_distance /= total_examples
 
         # Save best performing model based on hits@1
         if save_model:
@@ -1178,26 +1211,35 @@ class TrainerNLQ(object):
             score_file.write(f"\tHits@10: {all_final_reward_10:7.4f}\n")
             score_file.write(f"\tHits@20: {all_final_reward_20:7.4f}\n")
             score_file.write(f"\tMRR: {mrr:7.4f}\n")
+            score_file.write(f"Reasoning Diagnostics\n")
+            score_file.write(f"\tInvalid Step Rate: {all_final_invalid_step_rate:7.4f}\n")
+            score_file.write(f"\tCycle Rate: {all_final_cycle_rate:7.4f}\n")
+            score_file.write(f"\tBacktrack Rate: {all_final_backtrack_rate:7.4f}\n")
+            score_file.write(f"\tUnique Edges: {all_final_unique_edges:7.4f}\n")
+            score_file.write(f"\tRedundancy: {all_final_redundancy:7.4f}\n")
             if self.multi_answers:
-                score_file.write(f"Multi-Answer Metrics\n")
+                score_file.write(f"Multi-Answer Endpoint Coverage Metrics\n")
                 score_file.write(f"\tRecall: {all_final_answer_recall:7.4f}\n")
                 score_file.write(f"\tPrecision: {all_final_answer_precision:7.4f}\n")
                 score_file.write(f"\tF1 Score: {all_final_answer_f1:7.4f}\n")
             if self.environment.check_paths_exist():
-                score_file.write(f"Path Faithfulness Metrics\n")
-                score_file.write(f"\tPath Recall: {all_final_path_recall:7.4f}\n")
-                score_file.write(f"\tPath Precision: {all_final_path_precision:7.4f}\n")
-                score_file.write(f"\tPath F1 Score: {all_final_path_f1:7.4f}\n")
+                score_file.write(f"GT-Edge Overlap Metrics\n")
+                score_file.write(f"\tRecall: {all_final_path_recall:7.4f}\n")
+                score_file.write(f"\tPrecision: {all_final_path_precision:7.4f}\n")
+                score_file.write(f"\tF1 Score: {all_final_path_f1:7.4f}\n")
 
-                score_file.write(f"Node Coverage Metrics\n")
-                score_file.write(f"\tNode Recall: {all_final_node_recall:7.4f}\n")
-                score_file.write(f"\tNode Precision: {all_final_node_precision:7.4f}\n")
-                score_file.write(f"\tNode F1 Score: {all_final_node_f1:7.4f}\n")
+                score_file.write(f"Node-Set Overlap Metrics\n")
+                score_file.write(f"\tRecall: {all_final_node_recall:7.4f}\n")
+                score_file.write(f"\tPrecision: {all_final_node_precision:7.4f}\n")
+                score_file.write(f"\tF1 Score: {all_final_node_f1:7.4f}\n")
 
-                score_file.write(f"Relation Coverage Metrics\n")
-                score_file.write(f"\tRelation Recall: {all_final_rel_recall:7.4f}\n")
-                score_file.write(f"\tRelation Precision: {all_final_rel_precision:7.4f}\n")
-                score_file.write(f"\tRelation F1 Score: {all_final_rel_f1:7.4f}\n")
+                score_file.write(f"Relation-Set Overlap Metrics\n")
+                score_file.write(f"\tRecall: {all_final_rel_recall:7.4f}\n")
+                score_file.write(f"\tPrecision: {all_final_rel_precision:7.4f}\n")
+                score_file.write(f"\tF1 Score: {all_final_rel_f1:7.4f}\n")
+
+                logger.info("Path Edit Distance Metrics:")
+                score_file.write(f"\tNormalized: {all_edit_distance:7.4f}\n")
 
             score_file.write("\n") 
 
@@ -1208,60 +1250,70 @@ class TrainerNLQ(object):
         logger.info(f"\tHits@10: {all_final_reward_10:7.4f}")
         logger.info(f"\tHits@20: {all_final_reward_20:7.4f}")
         logger.info(f"\tMRR: {mrr:7.4f}")
+        logger.info("Reasoning Diagnostics:")
+        logger.info(f"\tInvalid Step Rate: {all_final_invalid_step_rate:7.4f}")
+        logger.info(f"\tCycle Rate: {all_final_cycle_rate:7.4f}")
+        logger.info(f"\tBacktrack Rate: {all_final_backtrack_rate:7.4f}")
+        logger.info(f"\tUnique Edges: {all_final_unique_edges:7.4f}")
+        logger.info(f"\tRedundancy: {all_final_redundancy:7.4f}")
         if self.multi_answers:
-            logger.info("Multi-Answer Metrics:")
+            logger.info("Multi-Answer Endpoint Coverage Metrics:")
             logger.info(f"\tRecall: {all_final_answer_recall:7.4f}")
             logger.info(f"\tPrecision: {all_final_answer_precision:7.4f}")
             logger.info(f"\tF1 Score: {all_final_answer_f1:7.4f}")
         if self.environment.check_paths_exist():
-            logger.info("Path Faithfulness Metrics:")
-            logger.info(f"\tPath Recall: {all_final_path_recall:7.4f}")
-            logger.info(f"\tPath Precision: {all_final_path_precision:7.4f}")
-            logger.info(f"\tPath F1 Score: {all_final_path_f1:7.4f}")
+            logger.info("GT-Edge Overlap Metrics:")
+            logger.info(f"\tRecall: {all_final_path_recall:7.4f}")
+            logger.info(f"\tPrecision: {all_final_path_precision:7.4f}")
+            logger.info(f"\tF1 Score: {all_final_path_f1:7.4f}")
 
-            logger.info("Node Coverage Metrics:")
-            logger.info(f"\tNode Recall: {all_final_node_recall:7.4f}")
-            logger.info(f"\tNode Precision: {all_final_node_precision:7.4f}")
-            logger.info(f"\tNode F1 Score: {all_final_node_f1:7.4f}")
+            logger.info("Node-Set Overlap Metrics:")
+            logger.info(f"\tRecall: {all_final_node_recall:7.4f}")
+            logger.info(f"\tPrecision: {all_final_node_precision:7.4f}")
+            logger.info(f"\tF1 Score: {all_final_node_f1:7.4f}")
 
-            logger.info("Relation Coverage Metrics:")
-            logger.info(f"\tRelation Recall: {all_final_rel_recall:7.4f}")
-            logger.info(f"\tRelation Precision: {all_final_rel_precision:7.4f}")
-            logger.info(f"\tRelation F1 Score: {all_final_rel_f1:7.4f}")
+            logger.info("Relation-Set Overlap Metrics:")
+            logger.info(f"\tRecall: {all_final_rel_recall:7.4f}")
+            logger.info(f"\tPrecision: {all_final_rel_precision:7.4f}")
+            logger.info(f"\tF1 Score: {all_final_rel_f1:7.4f}")
 
-            
+            logger.info("Path Edit Distance Metrics:")
+            logger.info(f"\tNormalized: {all_edit_distance:7.4f}")
 
         # Log evaluation metrics to WANDB
-        if self.use_wandb:
-            logger.info(f"Logging {mode} evaluation metrics to WANDB...")
-            logger.info(f"WANDB run state: {wandb.run is not None}")
-            logger.info(f"WANDB run id: {wandb.run.id if wandb.run else 'None'}")
+        if self.use_wandb and wandb.run:
+            logger.info(f"W&B logging: enabled (run_id={wandb.run.id})")
             try:
-                wandb.log({
-                    f'{mode}/hits@1': float(all_final_reward_1),
-                    f'{mode}/hits@3': float(all_final_reward_3),
-                    f'{mode}/hits@5': float(all_final_reward_5),
-                    f'{mode}/hits@10': float(all_final_reward_10),
-                    f'{mode}/hits@20': float(all_final_reward_20),
-                    f'{mode}/mrr': float(mrr),
-                    f'{mode}/recall': float(all_final_answer_recall) if all_final_answer_recall is not None else None,
-                    f'{mode}/precision': float(all_final_answer_precision) if all_final_answer_precision is not None else None,
-                    f'{mode}/f1_score': float(all_final_answer_f1) if all_final_answer_f1 is not None else None,
-                    f'{mode}/path_recall': float(all_final_path_recall) if all_final_path_recall is not None else None,
-                    f'{mode}/path_precision': float(all_final_path_precision) if all_final_path_precision is not None else None,
-                    f'{mode}/path_f1_score': float(all_final_path_f1) if all_final_path_f1 is not None else None,
-                    f'{mode}/node_recall': float(all_final_node_recall) if all_final_node_recall is not None else None,
-                    f'{mode}/node_precision': float(all_final_node_precision) if all_final_node_precision is not None else None,
-                    f'{mode}/node_f1_score': float(all_final_node_f1) if all_final_node_f1 is not None else None,
-                    f'{mode}/rel_recall': float(all_final_rel_recall) if all_final_rel_recall is not None else None,
-                    f'{mode}/rel_precision': float(all_final_rel_precision) if all_final_rel_precision is not None else None,
-                    f'{mode}/rel_f1_score': float(all_final_rel_f1) if all_final_rel_f1 is not None else None,
-                    f'{mode}/total_examples': int(total_examples)
-                })  # Let WANDB auto-assign step for evaluation metrics
-                logger.info(f"Successfully logged {mode} metrics to WANDB")
+                self.log_wandb_eval(
+                    mode=mode,
+                    total_examples=total_examples,
+                    hits1=all_final_reward_1,
+                    hits3=all_final_reward_3,
+                    hits5=all_final_reward_5,
+                    hits10=all_final_reward_10,
+                    hits20=all_final_reward_20,
+                    mrr=mrr,
+                    invalid_step_rate=all_final_invalid_step_rate,
+                    cycle_rate=all_final_cycle_rate,
+                    backtrack_rate=all_final_backtrack_rate,
+                    unique_edges=all_final_unique_edges,
+                    redundancy=all_final_redundancy,
+                    answer_recall=all_final_answer_recall,
+                    answer_precision=all_final_answer_precision,
+                    answer_f1=all_final_answer_f1,
+                    path_recall=all_final_path_recall,
+                    path_precision=all_final_path_precision,
+                    path_f1=all_final_path_f1,
+                    node_recall=all_final_node_recall,
+                    node_precision=all_final_node_precision,
+                    node_f1=all_final_node_f1,
+                    rel_recall=all_final_rel_recall,
+                    rel_precision=all_final_rel_precision,
+                    rel_f1=all_final_rel_f1,
+                    edit_distance=all_edit_distance,
+                )
             except Exception as e:
                 logger.error(f"Failed to log {mode} metrics to WANDB: {e}")
-                logger.error(f"WANDB run state after error: {wandb.run is not None}")
         else:
             logger.info(f"WANDB logging disabled for {mode} evaluation")
 
@@ -1272,6 +1324,11 @@ class TrainerNLQ(object):
             hits_at_10=all_final_reward_10,
             hits_at_20=all_final_reward_20,
             mrr=mrr,
+            invalid_step_rate=all_final_invalid_step_rate,
+            cycle_rate=all_final_cycle_rate,
+            backtrack_rate=all_final_backtrack_rate,
+            unique_edges=all_final_unique_edges,
+            redundancy=all_final_redundancy,
             max_hits_at_1=max_hits,
             max_mrr=max_mrr,
             answer_recall=all_final_answer_recall,
@@ -1286,6 +1343,7 @@ class TrainerNLQ(object):
             rel_recall=all_final_rel_recall,
             rel_precision=all_final_rel_precision,
             rel_f1=all_final_rel_f1,
+            edit_distance=all_edit_distance,
         )
 
     def predict(self, sess: tf.compat.v1.Session, beam: bool = False, mode: str = 'dev'):
@@ -1330,7 +1388,7 @@ class TrainerNLQ(object):
             self.relation_trajectory = []
             ####################
 
-            self.log_probs = np.zeros((temp_batch_size*self.test_rollouts,)) * 1.0
+            self.log_probs = np.zeros((temp_batch_size*effective_rollouts,)) * 1.0
 
             # For each hop/step
             for i in range(self.path_length):
@@ -1414,20 +1472,20 @@ class TrainerNLQ(object):
 
             # Reshape the reward to [orig_batch_size, num_rollouts], to calculate for how many of the
             # entity pair, at least one of the paths arrive at the correct answer
-            self.log_probs = np.reshape(self.log_probs, (temp_batch_size, self.test_rollouts))
+            self.log_probs = np.reshape(self.log_probs, (temp_batch_size, effective_rollouts))
             sorted_indx = np.argsort(-self.log_probs)
             
             # Get current and start entities
-            ce = episode.state['current_entities'].reshape((temp_batch_size, self.test_rollouts))
+            ce = episode.state['current_entities'].reshape((temp_batch_size, effective_rollouts))
 
             for b in range(temp_batch_size):
                 # Retrive Sample's context
                 question_txt = self.environment.batcher.translate_questions([episode.question_tokens[b]])[0]    # Convert question back to text
-                start_e = self.environment.batcher.translate_entities([episode.start_entities[b * self.test_rollouts]])[0]                 # Map id to entity for source node
+                start_e = self.environment.batcher.translate_entities([episode.start_entities[b * effective_rollouts]])[0]                 # Map id to entity for source node
                 if self.multi_answers:
                     end_e = self.environment.batcher.translate_entities([episode.end_entities[b]], dynamic_list=True)                     # Map id to entity for answer node
                 else:
-                    end_e = self.environment.batcher.translate_entities([episode.end_entities[b * self.test_rollouts]])                     # Map id to entity for answer node
+                    end_e = self.environment.batcher.translate_entities([episode.end_entities[b * effective_rollouts]])                     # Map id to entity for answer node
 
                 # Question Header Information
                 paths[question_txt].append(question_txt + "\n")
@@ -1435,7 +1493,7 @@ class TrainerNLQ(object):
                 paths[question_txt].append(f"KG GT Ans: {end_e}\n")
                 
                 r = sorted_indx[b][0] # highest scoring path
-                indx = b * self.test_rollouts + r           # Convert to global index
+                indx = b * effective_rollouts + r           # Convert to global index
                 paths[question_txt].append(f"Agent Ans: {str(self.environment.batcher.translate_entities([ce[b, r]])[0])}\n")
 
                 paths[question_txt].append(f"Path Score: {-self.log_probs[b, r]}\n")
@@ -1456,6 +1514,45 @@ class TrainerNLQ(object):
                 for p in paths[q]:
                     pos_file.write(p)
                 pos_file.write("\n")
+    
+    def log_wandb_eval(self, mode: str, total_examples: int, **vals):
+        # vals are already aggregated (averages)
+        base = {
+            f"{mode}/answer/hits@1": float(vals["hits1"]),
+            f"{mode}/answer/hits@3": float(vals["hits3"]),
+            f"{mode}/answer/hits@5": float(vals["hits5"]),
+            f"{mode}/answer/hits@10": float(vals["hits10"]),
+            f"{mode}/answer/hits@20": float(vals["hits20"]),
+            f"{mode}/answer/mrr": float(vals["mrr"]),
+            f"{mode}/total_examples": int(total_examples),
+            f"{mode}/reasoning/invalid_step_rate": float(vals["invalid_step_rate"]),
+            f"{mode}/reasoning/cycle_rate": float(vals["cycle_rate"]),
+            f"{mode}/reasoning/backtrack_rate": float(vals["backtrack_rate"]),
+            f"{mode}/reasoning/unique_edges": float(vals["unique_edges"]),
+            f"{mode}/reasoning/redundancy": float(vals["redundancy"]),
+        }
+
+        optional = {
+            f"{mode}/answer_set/rollout_recall": _as_float(vals.get("answer_recall")),
+            f"{mode}/answer_set/rollout_precision": _as_float(vals.get("answer_precision")),
+            f"{mode}/answer_set/rollout_f1": _as_float(vals.get("answer_f1")),
+
+            f"{mode}/evidence/edge_overlap/recall": _as_float(vals.get("path_recall")),
+            f"{mode}/evidence/edge_overlap/precision": _as_float(vals.get("path_precision")),
+            f"{mode}/evidence/edge_overlap/f1": _as_float(vals.get("path_f1")),
+
+            f"{mode}/evidence/node_overlap/recall": _as_float(vals.get("node_recall")),
+            f"{mode}/evidence/node_overlap/precision": _as_float(vals.get("node_precision")),
+            f"{mode}/evidence/node_overlap/f1": _as_float(vals.get("node_f1")),
+
+            f"{mode}/evidence/relation_overlap/recall": _as_float(vals.get("rel_recall")),
+            f"{mode}/evidence/relation_overlap/precision": _as_float(vals.get("rel_precision")),
+            f"{mode}/evidence/relation_overlap/f1": _as_float(vals.get("rel_f1")),
+
+            f"{mode}/evidence/path_edit_distance_norm": _as_float(vals.get("edit_distance")),
+        }
+
+        wandb.log({**base, **_drop_none(optional)})
 
     def finish_wandb(self) -> None:
         """
