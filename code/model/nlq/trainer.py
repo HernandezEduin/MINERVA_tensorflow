@@ -991,11 +991,11 @@ class TrainerNLQ(object):
                     beam_probs = new_scores[y, x]
                     beam_probs = beam_probs.reshape((-1, 1))
 
-                    # Path History Maintenance
-                    if print_paths or self.environment.check_paths_exist():
-                        for j in range(i):
-                            self.entity_trajectory[j] = self.entity_trajectory[j][y]
-                            self.relation_trajectory[j] = self.relation_trajectory[j][y]
+                    # # Path History Maintenance
+                    # if print_paths or self.environment.check_paths_exist():
+                    #     for j in range(i):
+                    #         self.entity_trajectory[j] = self.entity_trajectory[j][y]
+                    #         self.relation_trajectory[j] = self.relation_trajectory[j][y]
                 
                 ####logger code####
                 if print_paths or self.environment.check_paths_exist(): # Store the current path before the environment update
@@ -1021,6 +1021,7 @@ class TrainerNLQ(object):
 
             # Calculate the final reward
             rewards = episode.get_reward()  # [B*test_rollouts]
+            effective_length = episode.get_effective_path_length()
             answer_hits = episode._reward_to_hit_answer(rewards)  
 
             # Reshape the reward to [orig_batch_size, num_rollouts], to calculate for how many of the
@@ -1045,7 +1046,6 @@ class TrainerNLQ(object):
 
             # Get current and start entities
             ce = episode.state['current_entities'].reshape((temp_batch_size, effective_rollouts))
-            se = episode.start_entities.reshape((temp_batch_size, effective_rollouts))
             
             # Evaluate each sample/question's performance
             for b in range(temp_batch_size):
@@ -1135,6 +1135,8 @@ class TrainerNLQ(object):
                         end_e = self.environment.batcher.translate_entities([episode.end_entities[b]], dynamic_list=True)       # Map id to entity for answer node
                     else:
                         end_e = self.environment.batcher.translate_entities([episode.end_entities[b * effective_rollouts]])[0]  # Map id to entity for answer node
+                    gt_hop = episode.get_path_length(b)
+                    agent_hop = effective_length[indx]
 
                     # Question Header Information
                     paths[question_txt].append(f"{question_txt.strip().capitalize()}\n")
@@ -1151,6 +1153,8 @@ class TrainerNLQ(object):
                         question_path += f" --[{relations_path[step]}]--> {entities_path[step+1]}"
                     paths[question_txt].append(f"Predicted Path:   {question_path}\n")
                     paths[question_txt].append(f"Neg LogProb:      {(-self.log_probs[b, r]):.6f}\n")
+                    paths[question_txt].append(f"Gold Hop Count:   {gt_hop}\n")
+                    paths[question_txt].append(f"Agent Hop Count:  {agent_hop}\n")
                     paths[question_txt].append(f"Solved (Hit@1):   {bool(ans_reshape[b, r])}\n")
                     paths[question_txt].append("\n" + "=" * 40 + "\n") # clear distinction for different attempts of same question
 
@@ -1472,10 +1476,10 @@ class TrainerNLQ(object):
                     beam_probs = new_scores[y, x]
                     beam_probs = beam_probs.reshape((-1, 1))
 
-                    # Path History Maintenance
-                    for j in range(i):
-                        self.entity_trajectory[j] = self.entity_trajectory[j][y]
-                        self.relation_trajectory[j] = self.relation_trajectory[j][y]
+                    # # Path History Maintenance
+                    # for j in range(i):
+                    #     self.entity_trajectory[j] = self.entity_trajectory[j][y]
+                    #     self.relation_trajectory[j] = self.relation_trajectory[j][y]
                 
                 ####logger code####
                 # Store the current path before the environment update

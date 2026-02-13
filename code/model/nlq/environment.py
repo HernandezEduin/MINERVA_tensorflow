@@ -358,7 +358,10 @@ class EpisodeNLQ(object):
             return True
         return False
 
-    def get_subgraph_overlap(self, pred_path: List[List[int]], idx) -> Tuple[float, float, float]:
+    def get_path_length(self, idx: int) -> int:
+        return len(self.paths[idx])
+
+    def get_subgraph_overlap(self, pred_path: List[List[int]], idx: int) -> Tuple[float, float, float]:
         """
         Calculate the subgraph overlap between the predicted path and the ground-truth path for a given question index.
         DO NOT USE AS A REWARD SIGNAL.
@@ -649,8 +652,7 @@ class EpisodeNLQ(object):
         Returns:
             effective_path_lengths: Array [batch_size*total_rollouts] containing the effective path length for each rollout
         """
-        return np.clip(self.stop_steps, a_min=0, a_max=self.path_len)
-        # return self.stop_steps
+        return np.clip(self.stop_steps, a_min=1, a_max=self.path_len)
 
 
 class EnvNLQ(object):
