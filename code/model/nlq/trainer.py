@@ -1021,10 +1021,11 @@ class TrainerNLQ(object):
 
             # Calculate the final reward
             rewards = episode.get_reward()  # [B*test_rollouts]
+            answer_hits = episode._reward_to_hit_answer(rewards)  
 
             # Reshape the reward to [orig_batch_size, num_rollouts], to calculate for how many of the
             # entity pair, at least one of the paths arrive at the correct answer
-            reward_reshape = np.reshape(rewards, (temp_batch_size, effective_rollouts))  # [orig_batch, test_rollouts]
+            ans_reshape = np.reshape(answer_hits, (temp_batch_size, effective_rollouts))  # [orig_batch, test_rollouts]
             self.log_probs = np.reshape(self.log_probs, (temp_batch_size, effective_rollouts))
             sorted_indx = np.argsort(-self.log_probs)
 
@@ -1054,8 +1055,8 @@ class TrainerNLQ(object):
 
                 if self.pool == 'max':          # Evaluation done based on best performing rollout
                     for r in sorted_indx[b]:    # Go through paths sorted by score (highest first)
-                        if reward_reshape[b,r] == self.positive_reward:  # Found correct answer
-                            answer_pos = pos      # answer position is the current rank
+                        if ans_reshape[b,r]:    # Found correct answer
+                            answer_pos = pos    # answer position is the current rank
                             break
                         if ce[b, r] not in seen:  # Only count unique entities
                             seen.add(ce[b, r])
@@ -1066,7 +1067,7 @@ class TrainerNLQ(object):
                     answer = ''
                     for r in sorted_indx[b]:
                         scores[ce[b,r]].append(self.log_probs[b,r])     # Collect all scores for each entity
-                        if reward_reshape[b,r] == self.positive_reward:
+                        if ans_reshape[b,r]:
                             answer = ce[b,r]                            # Remember which entity is correct
                     
                     # Use log-sum-exp to combine scores for each entity
@@ -1124,38 +1125,34 @@ class TrainerNLQ(object):
                     all_final_rel_f1 += f1_score
 
                     all_edit_distance += episode.get_path_edit_distance(merged_path, b)
+                
                 # Comprehensive reasoning path report
                 if print_paths:
                     # Retrive Sample's context
-                    question_txt = self.environment.batcher.translate_questions([episode.question_tokens[b]])[0]    # Convert question back to text
-                    start_e = self.environment.batcher.translate_entities([episode.start_entities[b * self.test_rollouts]])                 # Map id to entity for source node
+                    question_txt = self.environment.batcher.translate_questions([episode.question_tokens[b]])[0]                # Convert question back to text
+                    start_e = self.environment.batcher.translate_entities([entities_path[0]])[0]                                # Map id to entity for source node
                     if self.multi_answers:
-                        end_e = self.environment.batcher.translate_entities([episode.end_entities[b]])                     # Map id to entity for answer node
+                        end_e = self.environment.batcher.translate_entities([episode.end_entities[b]], dynamic_list=True)       # Map id to entity for answer node
                     else:
-                        end_e = self.environment.batcher.translate_entities([episode.end_entities[b * self.test_rollouts]])                     # Map id to entity for answer node
+                        end_e = self.environment.batcher.translate_entities([episode.end_entities[b * effective_rollouts]])[0]  # Map id to entity for answer node
 
                     # Question Header Information
-                    paths[question_txt].append(str(start_e) + "\t" + str(end_e) + "\n")
-                    paths[question_txt].append("Reward:" + str(1 if answer_pos != None and answer_pos < 10 else 0) + "\n") # Answered correctly if top10
-                    for r in sorted_indx[b]:                        # Go through paths sorted by score (highest first)
-                        indx = b * effective_rollouts + r           # Convert to global index
-                        if rewards[indx] == self.positive_reward:
-                            rev = 1                                 # This path succeeded
-                        else:
-                            rev = -1                                # This path failed
+                    paths[question_txt].append(f"{question_txt.strip().capitalize()}\n")
+                    paths[question_txt].append(f"Start Entity:     {start_e}\n")
+                    paths[question_txt].append(f"Gold Answer:      {end_e}\n")
 
-                        # Answer Summary (StartEntity, EndEntity, PathScore)
-                        answers.append(self.environment.batcher.translate_entities([se[b,r]])[0]+'\t'+ self.environment.batcher.translate_entities([ce[b,r]])[0]+'\t'+ str(self.log_probs[b,r])+'\n')
+                    entities_path = self.environment.batcher.translate_entities(entities_path)
+                    relations_path = self.environment.batcher.translate_relations(relations_path)
+                    
+                    paths[question_txt].append(f"Predicted Ans:    {entities_path[-1]}\n")
 
-                        # Detailed Path Trajectory (entities sequence, relation sequence, success indicator, path score)
-                        paths[question_txt].append(
-                            '\t'.join([str(self.environment.batcher.translate_entities([e[indx]])) for e in
-                                       self.entity_trajectory]) + '\n' + '\t'.join(
-                                [str(self.environment.batcher.translate_relations([re[indx]])) for re in self.relation_trajectory]) + '\n' + str(
-                                rev) + '\n' + str(
-                                self.log_probs[b, r]) + '\n___' + '\n')
-
-                    paths[question_txt].append("#####################\n") # clear distinction for different attempts of same question
+                    question_path = entities_path[0]
+                    for step in range(self.path_length):
+                        question_path += f" --[{relations_path[step]}]--> {entities_path[step+1]}"
+                    paths[question_txt].append(f"Predicted Path:   {question_path}\n")
+                    paths[question_txt].append(f"Neg LogProb:      {(-self.log_probs[b, r]):.6f}\n")
+                    paths[question_txt].append(f"Solved (Hit@1):   {bool(ans_reshape[b, r])}\n")
+                    paths[question_txt].append("\n" + "=" * 40 + "\n") # clear distinction for different attempts of same question
 
             # Update overall rewards (Episode-wise)
             all_final_reward_1 += final_reward_1
@@ -1223,14 +1220,11 @@ class TrainerNLQ(object):
         # Store the paths for each question
         if print_paths:
             logger.info(f"[ printing paths at {os.path.join(self.output_dir, 'test_beam')} ]")
-            for q in paths:
-                j = q.replace('/', '-')
-                with codecs.open(self.path_logger_file_ + '_' + j, 'a', 'utf-8') as pos_file:
+            with codecs.open(self.path_logger_file_ + ".txt", 'a', 'utf-8') as pos_file:
+                for q in paths:
                     for p in paths[q]:
                         pos_file.write(p)
-            with open(self.path_logger_file_ + 'answers', 'w') as answer_file:
-                for a in answers:
-                    answer_file.write(a)
+                    # pos_file.write("\n")
 
         with open(os.path.join(self.output_dir, 'scores.txt'), 'a') as score_file:
             score_file.write("Answer Metrics\n")
@@ -1376,7 +1370,11 @@ class TrainerNLQ(object):
         )
 
     def predict(self, sess: tf.compat.v1.Session, beam: bool = False, mode: str = 'dev'):
-        # TODO: Modify this function so it can only do the inference (no KG answer)
+        """
+        Predict answers for the given mode (dev/test/train) and optionally print reasoning paths.
+        Does not perform model saving or metric aggregation, focuses on path logging and detailed output for analysis.
+        No ground truth comparison or Hits@N calculation, purely logs the model's predictions and paths for qualitative analysis.
+        """
         paths = defaultdict(list)       # Store paths for each question if print_paths is True
         feed_dict = {}                  # Feed dictionaries, gets updated each hop during evaluation
 
@@ -1512,21 +1510,14 @@ class TrainerNLQ(object):
                 # Retrive Sample's context
                 question_txt = self.environment.batcher.translate_questions([episode.question_tokens[b]])[0]    # Convert question back to text
                 start_e = self.environment.batcher.translate_entities([episode.start_entities[b * effective_rollouts]])[0]                 # Map id to entity for source node
-                if self.multi_answers:
-                    end_e = self.environment.batcher.translate_entities([episode.end_entities[b]], dynamic_list=True)                     # Map id to entity for answer node
-                else:
-                    end_e = self.environment.batcher.translate_entities([episode.end_entities[b * effective_rollouts]])                     # Map id to entity for answer node
 
                 # Question Header Information
-                paths[question_txt].append(question_txt + "\n")
-                paths[question_txt].append(f"KG Start : {start_e}\n")
-                paths[question_txt].append(f"KG GT Ans: {end_e}\n")
+                paths[question_txt].append(f"{question_txt.strip().capitalize()}\n")
+                paths[question_txt].append(f"Start Entity:     {start_e}\n")
                 
                 r = sorted_indx[b][0] # highest scoring path
                 indx = b * effective_rollouts + r           # Convert to global index
-                paths[question_txt].append(f"Agent Ans: {str(self.environment.batcher.translate_entities([ce[b, r]])[0])}\n")
-
-                paths[question_txt].append(f"Path Score: {-self.log_probs[b, r]}\n")
+                paths[question_txt].append(f"Predicted Ans:    {str(self.environment.batcher.translate_entities([ce[b, r]])[0])}\n")
 
                 entities_path = [str(self.environment.batcher.translate_entities([e[indx]])[0]) for e in self.entity_trajectory]
                 relations_path = [str(self.environment.batcher.translate_relations([re[indx]])[0]) for re in self.relation_trajectory]
@@ -1534,8 +1525,9 @@ class TrainerNLQ(object):
                 question_path = entities_path[0]
                 for step in range(self.path_length):
                     question_path += f" --[{relations_path[step]}]--> {entities_path[step+1]}"
-                paths[question_txt].append(f"Predicted Path: {question_path}\n")
-                paths[question_txt].append("================================\n") # clear distinction for different attempts of same question
+                paths[question_txt].append(f"Predicted Path:   {question_path}\n")
+                paths[question_txt].append(f"Neg LogProb:      {(-self.log_probs[b, r]):.6f}\n")
+                paths[question_txt].append("\n" + "=" * 40 + "\n") # clear distinction for different attempts of same question
         
         # Store the paths for each question
         logger.info(f"[ printing paths at {os.path.join(self.output_dir, 'test_beam')} ]")
@@ -1543,7 +1535,6 @@ class TrainerNLQ(object):
             for q in paths:
                 for p in paths[q]:
                     pos_file.write(p)
-                pos_file.write("\n")
     
     def log_wandb_eval(self, mode: str, total_examples: int, **vals):
         # vals are already aggregated (averages)
@@ -1790,7 +1781,7 @@ if __name__ == '__main__':
         # create files to store results
         if options['print_paths'] or options['print_predictions']:
             os.makedirs(os.path.join(path_logger_file, "test_beam"), exist_ok=True)
-            trainer.path_logger_file_ = os.path.join(path_logger_file, "test_beam", "paths")
+            trainer.path_logger_file_ = os.path.join(path_logger_file, "test_beam", "test_paths")
         
         with open(os.path.join(output_dir, 'scores.txt'), 'a') as score_file:
             score_file.write("Test (beam) scores with best model from " + save_path + "\n")
@@ -1799,6 +1790,7 @@ if __name__ == '__main__':
         trainer.test(sess, beam=options['use_beam'], print_paths=options['print_paths'], save_model=False, mode='test')
         if options['print_predictions']:
             set_seeds(options['seed']) # Ensure reproducibility for predictions
+            trainer.path_logger_file_ = os.path.join(path_logger_file, "test_beam", "predict_paths")
             trainer.predict(sess, beam=options['use_beam'], mode='test')
     
     logging.info(f"Evaluation completed. Closing Server")
