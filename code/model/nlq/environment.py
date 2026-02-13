@@ -159,6 +159,7 @@ class EpisodeNLQ(object):
 
         # Track which rollouts have stopped (if using stop signal) to prevent further transitions, but still allow reward calculation at the end of episode
         self.stopped_mask = np.zeros(self.current_entities.shape[0], dtype=bool)
+        self.stop_steps = np.full(self.current_entities.shape[0], fill_value=self.path_len, dtype=int)  # track at which step each rollout stopped, initialized to max path length (i.e. not stopped)
 
         # Initialize state with available actions from starting positions
         next_actions = self.grapher.return_next_raw_actions(self.current_entities)
@@ -248,6 +249,68 @@ class EpisodeNLQ(object):
             reward = np.select(condlist, choicelist)
         return reward
     
+    def _has_hit_answer(self) -> np.ndarray:
+        """
+        Helper function to check if current entities have hit the target answer entities.
+        Returns a boolean array indicating which rollouts have reached an answer.
+        Used internally for reward adjustment when using STOP signals.
+        """
+        if self.multi_answers:
+            return np.array([
+                self.current_entities[i] in self.end_entities[i // self.num_rollouts]
+                for i in range(self.current_entities.shape[0])
+            ])
+        else:
+            return self.current_entities == self.end_entities
+    
+    def _reward_to_hit_answer(self, reward: np.ndarray) -> np.ndarray:
+        """
+        Helper function to determine which rollouts have hit the answer based on the reward array.
+        Returns a boolean array indicating which rollouts have received a positive reward (i.e., hit an answer).
+        Used internally for reward adjustment when using STOP signals.
+        """
+        return reward == self.positive_reward
+
+    def adjust_rewards(
+            self,
+            reward: np.ndarray, 
+            stop_bonus: float, 
+            stop_penalty: float, 
+            length_penalty: float,
+            hit_mask: Optional[np.ndarray] = None
+        ) -> np.ndarray:
+        """
+        If using a STOP signal, we want to provide a small bonus for correctly stopping at an answer and a small penalty for incorrectly stopping at a non-answer.
+        This function adjusts the reward array to include these bonuses/penalties based on the stopped_mask and whether the current entities are correct answers.
+        
+        Args:
+            reward: Original reward array [batch_size*total_rollouts] before adjustment
+            stop_bonus: Bonus to apply for correctly stopping at an answer
+            stop_penalty: Penalty to apply for incorrectly stopping at a non-answer
+            length_penalty: Penalty to apply based on the length of the episode
+            hit_mask: Optional boolean array indicating which rollouts have hit an answer (if not provided, it will be computed from the reward array)
+        Returns:
+            Adjusted reward array [batch_size*total_rollouts] after applying STOP signal bonuses/penalties
+        """
+        if self.use_stop_signal:
+            if hit_mask is None: hit_mask = self._reward_to_hit_answer(reward)  # which rollouts have hit an answer based on original reward
+            correct_stop_mask = hit_mask & self.stopped_mask
+            incorrect_stop_mask = (~hit_mask) & self.stopped_mask
+
+            # ---- length cost in [0,1], 0 = earliest stop, 1 = latest / no stop ----
+            denom = max(1, int(self.current_hop) - 1)
+            step_cost = (self.stop_steps - 1) / denom  # shape [N], float in [0,1]
+
+            # apply length penalty to all rollouts (no-stop should have cost ~1)
+            if length_penalty > 0:
+                reward -= length_penalty * step_cost
+                
+            # STOP bonuses/penalties
+            reward[correct_stop_mask] += stop_bonus
+            reward[incorrect_stop_mask] -= stop_penalty
+
+        return reward
+
     def get_multi_answer_coverage(self) -> Tuple[float, float, float]:
         """
         Calculate multi-answer coverage metrics (recall, precision, F1) for the last nodes reached by all rollouts in the current batch.
@@ -562,7 +625,13 @@ class EpisodeNLQ(object):
 
         if self.use_stop_signal: 
             selected_relations = self.state['next_relations'][np.arange(self.no_examples*self.num_rollouts), action]
-            self.stopped_mask = np.logical_or(self.stopped_mask, selected_relations == self.grapher.rSTOP)
+
+            stop_action_mask = (selected_relations == self.grapher.rSTOP)  # Identify which agents have selected the STOP action
+            newly_stopped = stop_action_mask & (~self.stopped_mask)        # Identify which agents are newly stopped in this step (i.e., selected STOP now but were not previously stopped)
+            
+            self.stop_steps[newly_stopped] = self.current_hop              # Update stop_steps for newly stopped agents
+
+            self.stopped_mask = np.logical_or(self.stopped_mask, stop_action_mask) # Update stopped_mask to include newly stopped agents (once an agent is stopped, it remains stopped)
 
         # Update state with new actions from new positions
         next_actions = self.grapher.return_next_raw_actions(self.current_entities)
@@ -574,6 +643,19 @@ class EpisodeNLQ(object):
         self.state['next_entities'] = next_actions[:, :, 0]
         self.state['current_entities'] = self.current_entities
         return self.state
+
+    def get_effective_path_length(self) -> np.ndarray:
+        """
+        Get the effective path length for each rollout in the current batch.
+        
+        Effective path length is defined as the number of steps taken until the first STOP action is selected (if using STOP signal), or the total number of steps taken if not using STOP signal.
+        This metric provides insight into how long the agent's reasoning paths are, and can be used for analysis or diagnostic purposes.
+        
+        Returns:
+            effective_path_lengths: Array [batch_size*total_rollouts] containing the effective path length for each rollout
+        """
+        return np.clip(self.stop_steps, a_min=0, a_max=self.path_len)
+        # return self.stop_steps
 
 
 class EnvNLQ(object):

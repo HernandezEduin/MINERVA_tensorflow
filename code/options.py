@@ -107,6 +107,12 @@ def read_options() -> Dict[str, Any]:
                         help="Discount factor for future rewards in RL (typically 0.9-1.0)")
     parser.add_argument("--use_stop_signal", default='False', type=str2bool,
                         help="Whether to include a STOP action in the action space. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
+    parser.add_argument("--stop_signal_reward", default=0.0, type=float,
+                        help="Reward for taking the STOP action (if use_stop_signal is True)")
+    parser.add_argument("--stop_signal_penalty", default=0.0, type=float,
+                        help="Penalty for taking the STOP action when not at the correct answer (if use_stop_signal is True). Must be a positive value, as it will be subtracted from the reward.")
+    parser.add_argument("--length_penalty", default=0.0, type=float,
+                        help="Penalty for each step taken to encourage shorter reasoning paths (if use_stop_signal is True). Must be a positive value for the scalar, as it will be subtracted from the reward.")
     parser.add_argument("--use_restart_signal", default='False', type=str2bool,
                         help="Whether to include a RESTART action in the action space. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
     

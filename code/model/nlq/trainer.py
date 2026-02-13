@@ -165,6 +165,9 @@ class TrainerNLQ(object):
         use_restart_signal: bool = False,
         use_beam: Optional[bool] = False,
         embedding_server: Optional[EmbeddingServer] = None,
+        stop_signal_reward: float = 0.5,
+        stop_signal_penalty: float = -0.5,
+        length_penalty: float = 0.0,
         use_wandb: bool = False
     ) -> None:
         """
@@ -258,6 +261,9 @@ class TrainerNLQ(object):
         self.use_beam = use_beam
         self.seed = seed
         self.use_wandb = use_wandb
+        self.stop_signal_reward = stop_signal_reward
+        self.stop_signal_penalty = stop_signal_penalty
+        self.length_penalty = length_penalty
 
         # Debug logging for WANDB
         logger.info(f"Trainer initialized with use_wandb={self.use_wandb}")
@@ -542,37 +548,45 @@ class TrainerNLQ(object):
         return train_op
 
 
-    def calc_cum_discounted_reward(self, rewards: np.ndarray) -> np.ndarray:
+    def calc_cum_discounted_reward(self, rewards: np.ndarray, effective_length: np.ndarray) -> np.ndarray:
         """
-        Calculate cumulative discounted rewards for policy gradient training.
-        
-        Computes the discounted return G_t from each time step using the formula:
-        G_t = R_t + γ*R_{t+1} + γ²*R_{t+2} + ... + γ^{T-t}*R_T
-        
-        This provides the expected long-term reward from each state, which serves
-        as the target for baseline estimation and the weight for policy gradients.
-        The discounting encourages actions that lead to rewards sooner rather
-        than later.
-        
+        Calculate cumulative discounted rewards (returns) for policy gradient training with
+        per-episode termination determined by an effective path length.
+
+        For each episode i, the terminal reward is placed at the episode’s terminal step
+        t = L_i - 1, where L_i = effective_length[i]. The return is then propagated
+        backward with discounting:
+            G_{i,t} = γ * G_{i,t+1} + R_{i,t}
+        where R_{i,t} is zero everywhere except at t = L_i - 1. Timesteps t >= L_i are
+        treated as padding (after STOP) and their returns are set to 0.
+
         Args:
-            rewards: Final rewards received at episode termination.
-                Shape: [batch_size] with values typically in {-1, +1}
-                
+            rewards: Terminal reward per episode.
+                Shape: [batch_size], values typically in {0, +1} or {-1, +1}.
+            effective_length: Number of executed steps until the first STOP action
+                (inclusive) if using STOP, or the total steps taken otherwise.
+                Shape: [batch_size], assumed clipped to [1, path_length].
+
         Returns:
-            Cumulative discounted rewards for all time steps.
-            Shape: [batch_size, path_length] where entry [i,t] represents
-            the discounted return from time step t for episode i.
-            
-        Note:
-            - Only final time step gets immediate reward, others get discounted future
-            - Uses backward iteration for efficient computation
-            - Gamma (discount factor) controls future reward importance
+            cum_disc_reward: Discounted return for each timestep.
+                Shape: [batch_size, path_length], where cum_disc_reward[i, t] is the
+                discounted return from timestep t for episode i, and is 0 for t >= L_i.
+
+        Notes:
+            - Terminal-only reward: only the terminal step receives immediate reward.
+            - Backward iteration for efficient computation.
+            - Discount factor γ encourages achieving reward earlier in the episode.
         """
+
         running_add = np.zeros([rewards.shape[0]])  # [B]
         cum_disc_reward = np.zeros([rewards.shape[0], self.path_length])  # [B, T]
-        cum_disc_reward[:, self.path_length - 1] = rewards  # set the last time step to the reward received at the last state
+
+        # place terminal reward at t = L-1 (per episode), not always at T-1
+        term_idx = effective_length - 1  # [B], index of terminal step for each episode
+        cum_disc_reward[np.arange(rewards.shape[0]), term_idx] = rewards
         for t in reversed(range(self.path_length)):
             running_add = self.gamma * running_add + cum_disc_reward[:, t]
+            running_add[t >= effective_length] = 0
             cum_disc_reward[:, t] = running_add
         return cum_disc_reward
 
@@ -691,8 +705,22 @@ class TrainerNLQ(object):
 
             # Process the results (numpy)
             loss_before_regularization = np.stack(loss_before_regularization, axis=1)
-            rewards = episode.get_reward()  # get environment reward by checking the current position and the answer's position
-            cum_discounted_reward = self.calc_cum_discounted_reward(rewards)  # computed cumulative discounted reward [B, T]
+            raw_rewards = episode.get_reward()  # get environment reward by checking the current position and the answer's position
+            effective_length = episode.get_effective_path_length()  # get the effective length of the episode, which is the step at which the stop signal is given, or the last step if no stop signal is given
+            answer_hits = episode._reward_to_hit_answer(raw_rewards)   
+            
+            # adjust the rewards based on whether the stop signal is correct or not, if applicable
+            adjust_rewards = episode.adjust_rewards(
+                reward=raw_rewards,
+                hit_mask=answer_hits,
+                stop_bonus=self.stop_signal_reward, 
+                stop_penalty=self.stop_signal_penalty,
+                length_penalty=self.length_penalty,
+            )
+
+            # adjust_rewards = raw_rewards  # for now, do not adjust the rewards, just use the original rewards from the environment
+            
+            cum_discounted_reward = self.calc_cum_discounted_reward(adjust_rewards, effective_length)  # computed cumulative discounted reward [B, T]
 
             # Backpropagate the results
             batch_total_loss, _ = sess.partial_run(
@@ -703,20 +731,20 @@ class TrainerNLQ(object):
 
             # Update training statistics
             train_loss = 0.98 * train_loss + 0.02 * batch_total_loss
-            avg_reward = np.mean(rewards)
+            avg_reward = np.mean(adjust_rewards)
             if np.isnan(train_loss):
                 raise ArithmeticError("NaN loss")
 
             # Reshape the reward to [orig_batch_size, num_rollouts], to calculate for how many of the
             # entity pair, at least one of the paths arrive at the correct answer
-            reward_reshape = np.reshape(rewards, (self.batch_size, self.num_rollouts))  # [orig_batch, num_rollouts]
-            reward_reshape = np.sum(reward_reshape, axis=1)                             # [orig_batch]
-            reward_reshape = (reward_reshape > 0)
-            num_ep_correct = np.sum(reward_reshape)
+            ans_reshape = np.reshape(answer_hits, (self.batch_size, self.num_rollouts))  # [orig_batch, num_rollouts]
+            ans_reshape = np.sum(ans_reshape, axis=1)                                 # [orig_batch]
+            ans_reshape = (ans_reshape > 0)                                           # at least one
+            num_ep_correct = np.sum(ans_reshape)
 
             # Log training progress
             logger.info(
-                f"batch_counter: {self.batch_counter:<4d}, num_hits: {np.sum(rewards):<7.4f}, "
+                f"batch_counter: {self.batch_counter:<4d}, num_hits: {np.sum(answer_hits):<7.4f}, "
                 f"avg. reward per batch: {avg_reward:<7.4f}, num_ep_correct: {num_ep_correct:<4d}, "
                 f"avg_ep_correct: {num_ep_correct / self.batch_size:<7.4f}, train_loss: {train_loss:<7.4f}"
             )
@@ -727,7 +755,7 @@ class TrainerNLQ(object):
                     'train/batch_counter': self.batch_counter,
                     'train/loss': float(train_loss),
                     'train/batch_total_loss': float(batch_total_loss),
-                    'train/num_hits': float(np.sum(rewards)),
+                    'train/num_hits': float(np.sum(answer_hits)),
                     'train/avg_reward': float(avg_reward),
                     'train/num_ep_correct': int(num_ep_correct),
                     'train/avg_ep_correct': float(num_ep_correct / self.batch_size),
@@ -1347,6 +1375,7 @@ class TrainerNLQ(object):
         )
 
     def predict(self, sess: tf.compat.v1.Session, beam: bool = False, mode: str = 'dev'):
+        # TODO: Modify this function so it can only do the inference (no KG answer)
         paths = defaultdict(list)       # Store paths for each question if print_paths is True
         feed_dict = {}                  # Feed dictionaries, gets updated each hop during evaluation
 
@@ -1672,6 +1701,9 @@ if __name__ == '__main__':
             relation_vocab=relation_vocab,
             use_full_graph=options['use_full_graph'],
             use_stop_signal=options['use_stop_signal'],
+            stop_signal_reward=options['stop_signal_reward'],
+            stop_signal_penalty=options['stop_signal_penalty'],
+            length_penalty=options['length_penalty'],
             use_restart_signal=options['use_restart_signal'],
             embedding_server=embedding_server,
             use_wandb=options.get('track', False)
@@ -1738,6 +1770,9 @@ if __name__ == '__main__':
         use_full_graph=options['use_full_graph'], 
         use_stop_signal=options['use_stop_signal'],
         use_restart_signal=options['use_restart_signal'],
+        stop_signal_reward=options['stop_signal_reward'],
+        stop_signal_penalty=options['stop_signal_penalty'],
+        length_penalty=options['length_penalty'],
         embedding_server=embedding_server,
         use_wandb=options.get('track', False)  # Enable WANDB for evaluation if tracking is on
     )
