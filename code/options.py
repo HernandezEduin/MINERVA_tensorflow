@@ -119,6 +119,8 @@ def read_options() -> Dict[str, Any]:
     # Training Configuration
     parser.add_argument("--batch_size", default=128, type=int,
                         help="Number of questions processed in each training batch")
+    parser.add_argument("--test_batch_size", default=128, type=int,
+                        help="Number of questions processed in each evaluation batch")
     parser.add_argument("--learning_rate", default=1e-3, type=float,
                         help="Learning rate for the optimizer (Adam) and baseline regularization.")
     parser.add_argument("--grad_clip_norm", default=5, type=int,

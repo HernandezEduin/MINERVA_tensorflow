@@ -125,11 +125,12 @@ class TrainerNLQ(object):
     def __init__(
         self,
         batch_size: int,
+        test_batch_size: int,
         num_rollouts: int,
+        test_rollouts: int,
         positive_reward: float,
         negative_reward: float,
         path_length: int,
-        test_rollouts: int,
         data_input_dir: str,
         question_tokenizer_name: str,
         question_format: str,
@@ -180,11 +181,12 @@ class TrainerNLQ(object):
         
         Args:
             batch_size: Number of questions processed in each training batch
+            test_batch_size: Number of questions processed in each evaluation batch
             num_rollouts: Number of training rollouts per question
+            test_rollouts: Number of evaluation rollouts per question
             positive_reward: Reward for correct answers
             negative_reward: Reward for incorrect answers
             path_length: Maximum reasoning steps allowed
-            test_rollouts: Number of evaluation rollouts per question
             data_input_dir: Directory containing knowledge graph data files
             question_tokenizer_name: Tokenizer name for question embeddings
             question_format: Format of the question input ('full_text', 'relation_only', 'graph_only')
@@ -226,11 +228,12 @@ class TrainerNLQ(object):
 
         # Store all parameters as instance attributes
         self.batch_size = batch_size
+        self.test_batch_size = test_batch_size
         self.num_rollouts = num_rollouts
+        self.test_rollouts = test_rollouts
         self.positive_reward = positive_reward
         self.negative_reward = negative_reward
         self.path_length = path_length
-        self.test_rollouts = test_rollouts
         self.data_input_dir = data_input_dir
         self.question_tokenizer_name = question_tokenizer_name
         self.question_format = question_format
@@ -271,11 +274,12 @@ class TrainerNLQ(object):
         # shared environment accross modes, save space with graph builder and textual embeddings
         self.environment = EnvNLQ(
             batch_size=batch_size,
+            test_batch_size=test_batch_size,
             num_rollouts=num_rollouts,
+            test_rollouts=test_rollouts,
             positive_reward=positive_reward,
             negative_reward=negative_reward,
             path_length=path_length,
-            test_rollouts=test_rollouts,
             data_input_dir=data_input_dir,
             question_tokenizer_name=question_tokenizer_name,
             question_format=question_format,
@@ -303,13 +307,10 @@ class TrainerNLQ(object):
             use_entity_embeddings=use_entity_embeddings,
             train_entity_embeddings=train_entity_embeddings,
             train_relation_embeddings=train_relation_embeddings,
-            num_rollouts=num_rollouts,
-            test_rollouts=test_rollouts,
             LSTM_layers=LSTM_layers,
             projection_adapter=projection_adapter,
             projection_layers=projection_layers,
             projection_hidden=projection_hidden,
-            batch_size=batch_size,
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab
         )
@@ -1663,11 +1664,12 @@ if __name__ == '__main__':
     if not options['load_model']:
         trainer = TrainerNLQ(
             batch_size=options['batch_size'],
+            test_batch_size=options['test_batch_size'],
             num_rollouts=options['num_rollouts'],
+            test_rollouts=options['test_rollouts'],
             positive_reward=options['positive_reward'],
             negative_reward=options['negative_reward'],
             path_length=options['path_length'],
-            test_rollouts=options['test_rollouts'],
             data_input_dir=options['data_input_dir'],
             question_tokenizer_name=options['question_tokenizer_name'],
             question_format=options['question_format'],
@@ -1731,11 +1733,12 @@ if __name__ == '__main__':
     # Evaluation phase
     trainer = TrainerNLQ(
         batch_size=options['batch_size'],
+        test_batch_size=options['test_batch_size'],
         num_rollouts=options['num_rollouts'],
+        test_rollouts=options['test_rollouts'],
         positive_reward=options['positive_reward'],
         negative_reward=options['negative_reward'],
         path_length=options['path_length'],
-        test_rollouts=options['test_rollouts'],
         data_input_dir=options['data_input_dir'],
         question_tokenizer_name=options['question_tokenizer_name'],
         question_format=options['question_format'],

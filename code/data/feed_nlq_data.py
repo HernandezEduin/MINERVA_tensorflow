@@ -45,7 +45,8 @@ class QuestionBatcher:
     def __init__(
         self, 
         input_dir: str,
-        batch_size: int, 
+        batch_size: int,
+        test_batch_size: int, 
         question_tokenizer_name: str,
         question_format: str,
         cached_QAMetaData_path: str,
@@ -62,6 +63,7 @@ class QuestionBatcher:
         Args:
             input_dir: Directory containing entity and relation vocabularies
             batch_size: Number of samples per batch
+            test_batch_size: Number of samples per batch during evaluation
             question_tokenizer_name: HuggingFace model name for question tokenization
             question_format: Format of the question input ('full_text', 'relation_only', 'graph_only')
             cached_QAMetaData_path: Path to cached preprocessed QA metadata JSON
@@ -75,6 +77,7 @@ class QuestionBatcher:
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
         self.batch_size: int = batch_size
+        self.test_batch_size: int = test_batch_size
 
         # Load knowledge graph vocabularies
         ent2id, rel2id, id2ent, id2rel, ent2name, rel2name = load_dictionary(input_dir)
@@ -190,6 +193,15 @@ class QuestionBatcher:
         """
         self.batch_size = batch_size
 
+    def set_test_batch_size(self, test_batch_size: int) -> None:
+        """
+        Update the test batch size for subsequent evaluation batching operations.
+        
+        Args:
+            test_batch_size: New test batch size
+        """
+        self.test_batch_size = test_batch_size
+
     def get_mode(self) -> str:
         """
         Get the current batcher mode.
@@ -274,9 +286,9 @@ class QuestionBatcher:
         Yields:
             Tuple containing:
                 - questions (List[str]): Raw question text strings
-                - question_embeddings (np.ndarray): Question embeddings [batch_size, embedding_dim]
-                - source_ent (np.ndarray): Source entity IDs [batch_size]
-                - answers (Union[np.ndarray, List[List[int]]]): Answer entity IDs [batch_size]
+                - question_embeddings (np.ndarray): Question embeddings [test_batch_size, embedding_dim]
+                - source_ent (np.ndarray): Source entity IDs [test_batch_size]
+                - answers (Union[np.ndarray, List[List[int]]]): Answer entity IDs [test_batch_size]
         """
         remaining_questions: int = len(self.eval_df)
         current_idx: int = 0
@@ -286,10 +298,10 @@ class QuestionBatcher:
                 return
             
             # Determine batch indices for current iteration
-            if remaining_questions - self.batch_size > 0:
-                batch_idx = np.arange(current_idx, current_idx + self.batch_size)
-                current_idx += self.batch_size
-                remaining_questions -= self.batch_size
+            if remaining_questions - self.test_batch_size > 0:
+                batch_idx = np.arange(current_idx, current_idx + self.test_batch_size)
+                current_idx += self.test_batch_size
+                remaining_questions -= self.test_batch_size
             else:
                 # Handle final partial batch
                 batch_idx = np.arange(current_idx, len(self.eval_df))

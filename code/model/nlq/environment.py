@@ -93,7 +93,6 @@ class EpisodeNLQ(object):
         batch_size: int,
         path_len: int,
         num_rollouts: int,
-        test_rollouts: int,
         positive_reward: float,
         negative_reward: float,
         mode: str,
@@ -117,7 +116,6 @@ class EpisodeNLQ(object):
             batch_size: Number of questions in batch
             path_len: Maximum reasoning steps allowed
             num_rollouts: Number of training rollouts per question
-            test_rollouts: Number of evaluation rollouts per question
             positive_reward: Reward for correct answers
             negative_reward: Reward for incorrect answers
             mode: Current mode ('train', 'dev', or 'test')
@@ -132,10 +130,7 @@ class EpisodeNLQ(object):
         self.batch_size = batch_size
         self.path_len = path_len
         self.mode = mode
-        if self.mode == 'train':
-            self.num_rollouts = num_rollouts
-        else:
-            self.num_rollouts = test_rollouts
+        self.num_rollouts = num_rollouts
         self.multi_answers = multi_answers
         self.paths = paths
         self.paths_exists = paths is not None
@@ -693,11 +688,12 @@ class EnvNLQ(object):
     def __init__(
         self, 
         batch_size: int,
+        test_batch_size: int,
         num_rollouts: int,
+        test_rollouts: int,
         positive_reward: float,
         negative_reward: float,
         path_length: int,
-        test_rollouts: int,
         data_input_dir: str,
         question_tokenizer_name: str,
         question_format: str,
@@ -757,6 +753,7 @@ class EnvNLQ(object):
         self.negative_reward = negative_reward
         self.mode = mode
         self.path_len = path_length
+        self.test_batch_size = test_batch_size
         self.test_rollouts = test_rollouts
         self.multi_answers = multi_answers
         self.no_op_id = relation_vocab['NO_OP']
@@ -765,6 +762,7 @@ class EnvNLQ(object):
         self.batcher = QuestionBatcher(
             input_dir=input_dir,
             batch_size=self.batch_size,
+            test_batch_size=self.test_batch_size,
             question_tokenizer_name=question_tokenizer_name,
             cached_QAMetaData_path=cached_QAMetaData_path,
             question_format=question_format,
@@ -825,7 +823,6 @@ class EnvNLQ(object):
                     batch_size=self.batch_size,
                     path_len=self.path_len,
                     num_rollouts=self.num_rollouts,
-                    test_rollouts=self.test_rollouts,
                     positive_reward=self.positive_reward,
                     negative_reward=self.negative_reward,
                     mode=self.mode,
@@ -843,10 +840,9 @@ class EnvNLQ(object):
                     question_embeddings,
                     start_entities,
                     end_entities,
-                    batch_size=self.batch_size,
+                    batch_size=self.test_batch_size,
                     path_len=self.path_len,
-                    num_rollouts=self.num_rollouts,
-                    test_rollouts=self.test_rollouts,
+                    num_rollouts=self.test_rollouts,
                     positive_reward=self.positive_reward,
                     negative_reward=self.negative_reward,
                     mode=self.mode,

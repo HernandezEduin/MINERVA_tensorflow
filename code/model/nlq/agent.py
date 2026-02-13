@@ -75,13 +75,10 @@ class AgentNLQ(object):
         use_entity_embeddings: bool,
         train_entity_embeddings: bool,
         train_relation_embeddings: bool,
-        num_rollouts: int,
-        test_rollouts: int,
         LSTM_layers: int,
         projection_adapter: str,
         projection_layers: int,
         projection_hidden: int,
-        batch_size: int,
         entity_vocab: Dict[str, int],
         relation_vocab: Dict[str, int]
     ) -> None:
@@ -99,13 +96,10 @@ class AgentNLQ(object):
             use_entity_embeddings: Whether to include entity embeddings
             train_entity_embeddings: Whether entity embeddings are trainable
             train_relation_embeddings: Whether relation embeddings are trainable
-            num_rollouts: Parallel rollouts per question during training
-            test_rollouts: Parallel rollouts per question during evaluation
             LSTM_layers: Number of LSTM layers in policy network
             projection_adapter: Type of question projection adapter ('linear', 'mlp', 'residual')
             projection_layers: Number of layers in question projection MLP
             projection_hidden: Hidden dimension size for projection adapter
-            batch_size: Training batch size per question
             entity_vocab: Entity name to integer ID mapping for embedding lookup
             relation_vocab: Relation name to integer ID mapping for embedding lookup
             
@@ -125,6 +119,7 @@ class AgentNLQ(object):
         self.hidden_size = hidden_size                                      # dimension size of LSTM hidden state
         self.ePAD = tf.constant(entity_vocab['PAD'], dtype=tf.int32)        # entity padding token
         self.rPAD = tf.constant(relation_vocab['PAD'], dtype=tf.int32)      # relation padding token
+        self.drPad = tf.constant(relation_vocab['DUMMY_START_RELATION'], dtype=tf.int32)    # dummy relation for step 0 NOTE: Might be self loop action 
         if use_entity_embeddings:                                           # whether to use entity embeddings
             self.entity_initializer = tf.keras.initializers.GlorotUniform()
         else:
@@ -132,15 +127,10 @@ class AgentNLQ(object):
         self.train_entities = train_entity_embeddings                      # whether entity embeddings are trainable
         self.train_relations = train_relation_embeddings                   # whether relation embeddings are trainable
 
-        self.num_rollouts = num_rollouts                                    # number of simultaneous paths to take per question during 'training'
-        self.test_rollouts = test_rollouts                                  # number of simulataneous paths to take per question during 'evaluation'
         self.LSTM_Layers = LSTM_layers                                      # number of layers in LSTM
         self.projection_adapter = projection_adapter                        # type of question projection adapter ('linear', 'mlp', 'residual')
         self.projection_layers = projection_layers                          # number of layers in question projection MLP
         self.projection_hidden = projection_hidden                          # hidden dimension size for projection adapter
-        self.batch_size = batch_size * num_rollouts                        # effective batch size during training, also accounting the rollouts per questions
-        self.dummy_start_label = tf.constant(                               # dummy relation for step 0 NOTE: Might be self loop action
-            np.ones(self.batch_size, dtype='int64') * relation_vocab['DUMMY_START_RELATION'])
 
         self.entity_embedding_size = self.embedding_size
         self.use_entity_embeddings = use_entity_embeddings
@@ -617,11 +607,11 @@ class AgentNLQ(object):
         """
 
         self.baseline_inputs = []
+        batch_size = tf.shape(question_embedding)[0]
 
         # Initial State for LSTM
-        state = self.policy_step.zero_state(batch_size=self.batch_size, dtype=tf.float32)
-
-        prev_relation = self.dummy_start_label
+        state = self.policy_step.zero_state(batch_size=batch_size, dtype=tf.float32)
+        prev_relation = tf.ones(batch_size, dtype=tf.int32) * self.drPad  # dummy relation for step 0 NOTE: Might be self loop action
 
         all_loss = []       # list of loss tensors each [B,]
         all_logits = []     # list of actions each [B,]
