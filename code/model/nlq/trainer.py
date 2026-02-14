@@ -61,6 +61,7 @@ EvaluationMetrics = namedtuple('EvaluationMetrics', [
     'rel_recall', 'rel_precision', 'rel_f1',
     'edit_distance',
     'invalid_step_rate', 'cycle_rate', 'backtrack_rate', 'unique_edges', 'redundancy',
+    'effective_steps',
     'mrr', 'max_hits_at_1', 'max_mrr'
 ])
 
@@ -864,6 +865,7 @@ class TrainerNLQ(object):
         all_final_backtrack_rate = 0
         all_final_unique_edges = 0
         all_final_redundancy = 0
+        all_final_steps = 0
         
         if self.multi_answers:
             all_final_answer_recall = 0
@@ -983,6 +985,11 @@ class TrainerNLQ(object):
                     state['next_entities'] = state['next_entities'][y,:]
                     agent_mem = agent_mem[:, :, y, :]
                     
+                    # Keep STOP bookkeeping aligned with the new beam ordering
+                    if getattr(episode, "use_stop_signal", False):
+                        episode.stopped_mask = episode.stopped_mask[y]
+                        episode.stop_steps = episode.stop_steps[y]
+
                     # Override Action Selection
                     test_action_idx = x # Selected actions
                     chosen_relation = state['next_relations'][np.arange(temp_batch_size*k), x]
@@ -991,11 +998,11 @@ class TrainerNLQ(object):
                     beam_probs = new_scores[y, x]
                     beam_probs = beam_probs.reshape((-1, 1))
 
-                    # # Path History Maintenance
-                    # if print_paths or self.environment.check_paths_exist():
-                    #     for j in range(i):
-                    #         self.entity_trajectory[j] = self.entity_trajectory[j][y]
-                    #         self.relation_trajectory[j] = self.relation_trajectory[j][y]
+                    # Path History Maintenance
+                    if print_paths or self.environment.check_paths_exist():
+                        for j in range(i):
+                            self.entity_trajectory[j] = self.entity_trajectory[j][y]
+                            self.relation_trajectory[j] = self.relation_trajectory[j][y]
                 
                 ####logger code####
                 if print_paths or self.environment.check_paths_exist(): # Store the current path before the environment update
@@ -1108,6 +1115,8 @@ class TrainerNLQ(object):
                 all_final_unique_edges += unique_edges
                 all_final_redundancy += redundancy
 
+                all_final_steps += effective_length[indx]
+
                 if self.environment.check_paths_exist():   # If path existence checking is enabled
                     precision, recall, f1_score = episode.get_subgraph_overlap(merged_path, b)
                     all_final_path_precision += precision
@@ -1142,6 +1151,7 @@ class TrainerNLQ(object):
                     paths[question_txt].append(f"{question_txt.strip().capitalize()}\n")
                     paths[question_txt].append(f"Start Entity:     {start_e}\n")
                     paths[question_txt].append(f"Gold Answer:      {end_e}\n")
+                    paths[question_txt].append(f"Sanity Match:     {ce[b,r] == entities_path[-1]}\n")
 
                     entities_path = self.environment.batcher.translate_entities(entities_path)
                     relations_path = self.environment.batcher.translate_relations(relations_path)
@@ -1179,6 +1189,7 @@ class TrainerNLQ(object):
         all_final_backtrack_rate /= total_examples
         all_final_unique_edges /= total_examples
         all_final_redundancy /= total_examples
+        all_final_steps /= total_examples
 
         if self.multi_answers:
             all_final_answer_recall /= total_examples
@@ -1244,6 +1255,7 @@ class TrainerNLQ(object):
             score_file.write(f"\tBacktrack Rate: {all_final_backtrack_rate:7.4f}\n")
             score_file.write(f"\tUnique Edges: {all_final_unique_edges:7.4f}\n")
             score_file.write(f"\tRedundancy: {all_final_redundancy:7.4f}\n")
+            score_file.write(f"\tAvg Steps: {all_final_steps:7.4f}\n")
             if self.multi_answers:
                 score_file.write(f"Multi-Answer Endpoint Coverage Metrics\n")
                 score_file.write(f"\tRecall: {all_final_answer_recall:7.4f}\n")
@@ -1283,6 +1295,7 @@ class TrainerNLQ(object):
         logger.info(f"\tBacktrack Rate: {all_final_backtrack_rate:7.4f}")
         logger.info(f"\tUnique Edges: {all_final_unique_edges:7.4f}")
         logger.info(f"\tRedundancy: {all_final_redundancy:7.4f}")
+        logger.info(f"\tAvg Steps: {all_final_steps:7.4f}")
         if self.multi_answers:
             logger.info("Multi-Answer Endpoint Coverage Metrics:")
             logger.info(f"\tRecall: {all_final_answer_recall:7.4f}")
@@ -1325,6 +1338,7 @@ class TrainerNLQ(object):
                     backtrack_rate=all_final_backtrack_rate,
                     unique_edges=all_final_unique_edges,
                     redundancy=all_final_redundancy,
+                    effective_steps=all_final_steps,
                     answer_recall=all_final_answer_recall,
                     answer_precision=all_final_answer_precision,
                     answer_f1=all_final_answer_f1,
@@ -1356,6 +1370,7 @@ class TrainerNLQ(object):
             backtrack_rate=all_final_backtrack_rate,
             unique_edges=all_final_unique_edges,
             redundancy=all_final_redundancy,
+            effective_steps=all_final_steps,
             max_hits_at_1=max_hits,
             max_mrr=max_mrr,
             answer_recall=all_final_answer_recall,
@@ -1468,6 +1483,11 @@ class TrainerNLQ(object):
                     state['next_entities'] = state['next_entities'][y,:]
                     agent_mem = agent_mem[:, :, y, :]
                     
+                    # Keep STOP bookkeeping aligned with the new beam ordering
+                    if getattr(episode, "use_stop_signal", False):
+                        episode.stopped_mask = episode.stopped_mask[y]
+                        episode.stop_steps = episode.stop_steps[y]
+
                     # Override Action Selection
                     test_action_idx = x # Selected actions
                     chosen_relation = state['next_relations'][np.arange(temp_batch_size*k), x]
@@ -1476,10 +1496,10 @@ class TrainerNLQ(object):
                     beam_probs = new_scores[y, x]
                     beam_probs = beam_probs.reshape((-1, 1))
 
-                    # # Path History Maintenance
-                    # for j in range(i):
-                    #     self.entity_trajectory[j] = self.entity_trajectory[j][y]
-                    #     self.relation_trajectory[j] = self.relation_trajectory[j][y]
+                    # Path History Maintenance
+                    for j in range(i):
+                        self.entity_trajectory[j] = self.entity_trajectory[j][y]
+                        self.relation_trajectory[j] = self.relation_trajectory[j][y]
                 
                 ####logger code####
                 # Store the current path before the environment update
@@ -1555,6 +1575,7 @@ class TrainerNLQ(object):
             f"{mode}/reasoning/backtrack_rate": float(vals["backtrack_rate"]),
             f"{mode}/reasoning/unique_edges": float(vals["unique_edges"]),
             f"{mode}/reasoning/redundancy": float(vals["redundancy"]),
+            f"{mode}/reasoning/effective_steps": float(vals["effective_steps"]),
         }
 
         optional = {
