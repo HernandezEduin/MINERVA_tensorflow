@@ -296,6 +296,9 @@ class EpisodeNLQ(object):
             denom = max(1, int(self.current_hop) - 1)
             step_cost = (self.stop_steps - 1) / denom  # shape [N], float in [0,1]
 
+            # convert to float for reward adjustment calculations
+            reward = reward.astype(np.float32)
+
             # apply length penalty to all rollouts (no-stop should have cost ~1)
             if length_penalty > 0:
                 reward -= length_penalty * step_cost
