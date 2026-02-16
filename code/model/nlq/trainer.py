@@ -1151,7 +1151,6 @@ class TrainerNLQ(object):
                     paths[question_txt].append(f"{question_txt.strip().capitalize()}\n")
                     paths[question_txt].append(f"Start Entity:     {start_e}\n")
                     paths[question_txt].append(f"Gold Answer:      {end_e}\n")
-                    paths[question_txt].append(f"Sanity Match:     {ce[b,r] == entities_path[-1]}\n")
 
                     entities_path = self.environment.batcher.translate_entities(entities_path)
                     relations_path = self.environment.batcher.translate_relations(relations_path)
