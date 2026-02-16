@@ -78,7 +78,8 @@ class RelationEntityGrapher:
         entity_vocab: Dict[str, int], 
         max_num_actions: int,
         use_stop_signal: bool = False,
-        use_restart_signal: bool = False
+        use_restart_signal: bool = False,
+        use_directed_graph: bool = False
     ) -> None:
         """
         Initialize the knowledge graph from a triple file.
@@ -99,7 +100,7 @@ class RelationEntityGrapher:
                             Determines the size of the action space array
             use_stop_signal: Whether to include a STOP action in the action space
             use_restart_signal: Whether to include a RESTART action in the action space
-                            
+            use_directed_graph: Whether to treat the graph as directed (no inverse relations) or undirected (include inverse relations).
         Raises:
             KeyError: If required special tokens ('PAD', 'NO_OP') are missing
             FileNotFoundError: If triple_store file doesn't exist
@@ -123,7 +124,7 @@ class RelationEntityGrapher:
         self.entity_vocab: Dict[str, int] = entity_vocab
         self.use_stop_signal: bool = use_stop_signal
         self.use_restart_signal: bool = use_restart_signal
-        
+        self.use_directed_graph: bool = use_directed_graph
         # Temporary storage for graph construction
         self.store: defaultdict = defaultdict(list)
         
@@ -216,6 +217,9 @@ class RelationEntityGrapher:
                 if action_count >= self.array_store.shape[1]:
                     # Maximum actions reached, truncate remaining neighbors
                     break
+                if self.use_directed_graph and relation in self.inverse_tokens:
+                    # Skip inverse relations if only directed relations are used
+                    continue
                 self.array_store[entity_id, action_count, 0] = target_entity
                 self.array_store[entity_id, action_count, 1] = relation
                 action_count += 1

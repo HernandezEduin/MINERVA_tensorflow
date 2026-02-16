@@ -52,6 +52,8 @@ def read_options() -> Dict[str, Any]:
                         help="Maximum number of relations/actions per entity in the knowledge graph")
     parser.add_argument("--use_full_graph", type=str2bool, default='True',
                         help="Whether to use the full knowledge graph (train + test + dev) or a subgraph (train).")
+    parser.add_argument("--use_directed_graph", default='False', type=str2bool,
+                        help="Whether to treat the graph as directed (no inverse relations) or undirected (include inverse relations). Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
 
     # QA Dataset
     parser.add_argument("--question_format", default="full_text", type=str, choices=["full_text", "relation_only", "graph_only"],

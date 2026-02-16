@@ -163,6 +163,7 @@ class TrainerNLQ(object):
         relation_vocab: Dict[str, int],
         multi_answers: bool = False,
         use_full_graph: bool = False,
+        use_directed_graph: bool = False,
         use_stop_signal: bool = False,
         use_restart_signal: bool = False,
         use_beam: Optional[bool] = False,
@@ -216,6 +217,11 @@ class TrainerNLQ(object):
             seed: Random seed for reproducibility
             entity_vocab: Entity name to integer ID mapping for embedding lookup
             relation_vocab: Relation name to integer ID mapping for embedding lookup
+            multi_answers: Whether to handle questions with multiple correct answers
+            use_full_graph: Whether to use the full knowledge graph (train + dev + test) or only the training subgraph
+            use_directed_graph: Whether to treat the graph as directed (no inverse relations) or undirected (include inverse relations)
+            use_stop_signal: Whether to include a STOP action in the action space
+            use_restart_signal: Whether to include a RESTART action in the action space
             use_beam: Whether to use beam search during decoding
             embedding_server: Optional service for generating question embeddings
                              from natural language text using pre-trained models
@@ -292,6 +298,7 @@ class TrainerNLQ(object):
             relation_vocab=relation_vocab, 
             mode='train',
             use_full_graph=use_full_graph,
+            use_directed_graph=use_directed_graph,
             use_stop_signal=use_stop_signal,
             use_restart_signal=use_restart_signal,
             seed=seed,
@@ -1276,7 +1283,7 @@ class TrainerNLQ(object):
                 score_file.write(f"\tPrecision: {all_final_rel_precision:7.4f}\n")
                 score_file.write(f"\tF1 Score: {all_final_rel_f1:7.4f}\n")
 
-                logger.info("Path Edit Distance Metrics:")
+                score_file.write("Path Edit Distance Metrics:")
                 score_file.write(f"\tNormalized: {all_edit_distance:7.4f}\n")
 
             score_file.write("\n") 
@@ -1717,6 +1724,7 @@ if __name__ == '__main__':
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab,
             use_full_graph=options['use_full_graph'],
+            use_directed_graph=options['use_directed_graph'],
             use_stop_signal=options['use_stop_signal'],
             stop_signal_reward=options['stop_signal_reward'],
             stop_signal_penalty=options['stop_signal_penalty'],
@@ -1786,6 +1794,7 @@ if __name__ == '__main__':
         entity_vocab=entity_vocab, 
         relation_vocab=relation_vocab,
         use_full_graph=options['use_full_graph'], 
+        use_directed_graph=options['use_directed_graph'], 
         use_stop_signal=options['use_stop_signal'],
         use_restart_signal=options['use_restart_signal'],
         stop_signal_reward=options['stop_signal_reward'],

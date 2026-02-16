@@ -707,6 +707,7 @@ class EnvNLQ(object):
         mode: str = 'train', 
         multi_answers: bool = False,
         use_full_graph: bool = False,
+        use_directed_graph: bool = True,
         use_stop_signal: bool = False,
         use_restart_signal: bool = False,
         seed: Optional[int] = None,
@@ -737,6 +738,7 @@ class EnvNLQ(object):
             mode: Operation mode - 'train' for training, 'dev'/'test' for evaluation
             multi_answers: Whether to handle questions with multiple correct answers
             use_full_graph: Whether to use the full graph (including test/dev triples) or only training graph
+            use_directed_graph: Whether to treat the graph as directed (no inverse relations) or undirected (include inverse relations)
             use_stop_signal: Whether to include a STOP action in the action space
             use_restart_signal: Whether to include a RESTART action in the action space
             seed: Optional seed for random number generation
@@ -789,7 +791,8 @@ class EnvNLQ(object):
             entity_vocab=entity_vocab,
             relation_vocab=relation_vocab,
             use_stop_signal=use_stop_signal,
-            use_restart_signal=use_restart_signal
+            use_restart_signal=use_restart_signal,
+            use_directed_graph=use_directed_graph,
         )
 
     def get_episodes(self) -> Generator[EpisodeNLQ, None, None]:
