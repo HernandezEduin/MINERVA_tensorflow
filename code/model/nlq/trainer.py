@@ -591,11 +591,11 @@ class TrainerNLQ(object):
         cum_disc_reward = np.zeros([rewards.shape[0], self.path_length])  # [B, T]
 
         # place terminal reward at t = L-1 (per episode), not always at T-1
-        term_idx = effective_length - 1  # [B], index of terminal step for each episode
+        term_idx = effective_length  # [B], index of terminal step for each episode
         cum_disc_reward[np.arange(rewards.shape[0]), term_idx] = rewards
         for t in reversed(range(self.path_length)):
             running_add = self.gamma * running_add + cum_disc_reward[:, t]
-            running_add[t >= effective_length] = 0
+            running_add[t > effective_length] = 0
             cum_disc_reward[:, t] = running_add
         return cum_disc_reward
 

@@ -293,8 +293,8 @@ class EpisodeNLQ(object):
             incorrect_stop_mask = (~hit_mask) & self.stopped_mask
 
             # ---- length cost in [0,1], 0 = earliest stop, 1 = latest / no stop ----
-            denom = max(1, int(self.current_hop) - 1)
-            step_cost = (self.stop_steps - 1) / denom  # shape [N], float in [0,1]
+            denom = max(1, int(self.current_hop))
+            step_cost = (self.stop_steps) / denom  # shape [N], float in [0,1]
 
             # convert to float for reward adjustment calculations
             reward = reward.astype(np.float32)
@@ -630,7 +630,7 @@ class EpisodeNLQ(object):
             stop_action_mask = (selected_relations == self.grapher.rSTOP)  # Identify which agents have selected the STOP action
             newly_stopped = stop_action_mask & (~self.stopped_mask)        # Identify which agents are newly stopped in this step (i.e., selected STOP now but were not previously stopped)
             
-            self.stop_steps[newly_stopped] = self.current_hop              # Update stop_steps for newly stopped agents
+            self.stop_steps[newly_stopped] = self.current_hop - 1           # Update stop_steps for newly stopped agents
 
             self.stopped_mask = np.logical_or(self.stopped_mask, stop_action_mask) # Update stopped_mask to include newly stopped agents (once an agent is stopped, it remains stopped)
 
@@ -655,7 +655,7 @@ class EpisodeNLQ(object):
         Returns:
             effective_path_lengths: Array [batch_size*total_rollouts] containing the effective path length for each rollout
         """
-        return np.clip(self.stop_steps, a_min=1, a_max=self.path_len)
+        return np.clip(self.stop_steps, a_min=0, a_max=self.path_len - 1)
 
 
 class EnvNLQ(object):
