@@ -1129,6 +1129,7 @@ class TrainerNLQ(object):
                     all_final_path_precision += precision
                     all_final_path_recall += recall
                     all_final_path_f1 += f1_score
+                    path_f1 = f1_score
 
                     precision, recall, f1_score = episode.get_node_coverage(entities_path, b)
                     all_final_node_precision += precision
@@ -1140,7 +1141,8 @@ class TrainerNLQ(object):
                     all_final_rel_recall += recall
                     all_final_rel_f1 += f1_score
 
-                    all_edit_distance += episode.get_path_edit_distance(merged_path, b)
+                    ed_dist = episode.get_path_edit_distance(merged_path, b)
+                    all_edit_distance += ed_dist
                 
                 # Comprehensive reasoning path report
                 if print_paths:
@@ -1151,8 +1153,18 @@ class TrainerNLQ(object):
                         end_e = self.environment.batcher.translate_entities([episode.end_entities[b]], dynamic_list=True)       # Map id to entity for answer node
                     else:
                         end_e = self.environment.batcher.translate_entities([episode.end_entities[b * effective_rollouts]])[0]  # Map id to entity for answer node
-                    gt_hop = episode.get_path_length(b)
+                    
                     agent_hop = effective_length[indx]
+
+                    # Check if gold path exists and retrieve it for comparison
+                    if self.environment.check_paths_exist():
+                        gt_hop = episode.get_path_length(b)
+                        gt_path = episode.get_path(b)  # Get the gold path for this question
+                        gt_entities = self.environment.batcher.translate_entities([step[0] for step in gt_path] + [gt_path[-1][2]])
+                        gt_relations = self.environment.batcher.translate_relations([step[1] for step in gt_path])
+                        gt_path = f"{gt_entities[0]}"
+                        for ent, rel in zip(gt_entities[1:], gt_relations):
+                            gt_path += f" --[{rel}]--> {ent}"
 
                     # Question Header Information
                     paths[question_txt].append(f"{question_txt.strip().capitalize()}\n")
@@ -1164,12 +1176,22 @@ class TrainerNLQ(object):
                     
                     paths[question_txt].append(f"Predicted Ans:    {entities_path[-1]}\n")
 
+                    # Print Paths
+                    if self.environment.check_paths_exist(): paths[question_txt].append(f"Gold Path:        {gt_path}\n")
+                    
                     question_path = entities_path[0]
-                    for step in range(self.path_length):
-                        question_path += f" --[{relations_path[step]}]--> {entities_path[step+1]}"
+                    for ent, rel in zip(entities_path[1:], relations_path):
+                        question_path += f" --[{rel}]--> {ent}"
                     paths[question_txt].append(f"Predicted Path:   {question_path}\n")
-                    paths[question_txt].append(f"Neg LogProb:      {(-self.log_probs[b, r]):.6f}\n")
-                    paths[question_txt].append(f"Gold Hop Count:   {gt_hop}\n")
+
+                    # Print Metrics
+                    if self.environment.check_paths_exist(): 
+                        paths[question_txt].append(f"Path F1 Score(↑): {path_f1:.4f}\n")
+                        paths[question_txt].append(f"Edit Distance(↓): {ed_dist:.4f}\n")
+                    paths[question_txt].append(f"Neg LogProb(↓):   {(-self.log_probs[b, r]):.6f}\n")
+
+                    # Print Hop Count and Hit@1
+                    if self.environment.check_paths_exist(): paths[question_txt].append(f"Gold Hop Count:   {gt_hop}\n")
                     paths[question_txt].append(f"Agent Hop Count:  {agent_hop}\n")
                     paths[question_txt].append(f"Solved (Hit@1):   {bool(ans_reshape[b, r])}\n")
                     paths[question_txt].append("\n" + "=" * 40 + "\n") # clear distinction for different attempts of same question
@@ -1283,7 +1305,7 @@ class TrainerNLQ(object):
                 score_file.write(f"\tPrecision: {all_final_rel_precision:7.4f}\n")
                 score_file.write(f"\tF1 Score: {all_final_rel_f1:7.4f}\n")
 
-                score_file.write("Path Edit Distance Metrics:")
+                score_file.write("Path Edit Distance Metrics:\n")
                 score_file.write(f"\tNormalized: {all_edit_distance:7.4f}\n")
 
             score_file.write("\n") 

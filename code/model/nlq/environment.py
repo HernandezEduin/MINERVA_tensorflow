@@ -361,8 +361,23 @@ class EpisodeNLQ(object):
             return True
         return False
 
+    def get_path(self, idx: int) -> Optional[List[List[int]]]:
+        """
+        Get the ground-truth path for a given question index.
+        Returns:
+            List of edges in the path, where each edge is represented as a tuple (head, relation, tail).
+            Returns None if no paths are available.
+        """
+        if self.paths_exists:
+            return self.paths[idx]
+        else:
+            return None
+
     def get_path_length(self, idx: int) -> int:
-        return len(self.paths[idx])
+        if self.paths_exists:
+            return len(self.paths[idx])
+        else:
+            return 0
 
     def get_subgraph_overlap(self, pred_path: List[List[int]], idx: int) -> Tuple[float, float, float]:
         """
@@ -400,7 +415,7 @@ class EpisodeNLQ(object):
         f1_score = 2 * precision * recall / (precision + recall + 1e-8)
         return precision, recall, f1_score
 
-    def get_path_edit_distance(self, pred_path: List[List[int]], idx) -> int:
+    def get_path_edit_distance(self, pred_path: List[List[int]], idx) -> float:
         """
         Calculate the edit distance between the predicted path and the ground-truth path for a given question index.
         Edit distance is defined as the minimum number of edge insertions, deletions, or substitutions required to transform the predicted path into the ground-truth path.
@@ -763,7 +778,6 @@ class EnvNLQ(object):
         self.test_batch_size = test_batch_size
         self.test_rollouts = test_rollouts
         self.multi_answers = multi_answers
-        self.no_op_id = relation_vocab['NO_OP']
         input_dir = data_input_dir
 
         self.batcher = QuestionBatcher(
