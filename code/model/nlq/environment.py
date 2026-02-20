@@ -83,6 +83,7 @@ class EpisodeNLQ(object):
         >>> rewards = episode.get_reward()
     """
 
+    # 1) Lifecycle & main interface
     def __init__(
         self, 
         graph: RelationEntityGrapher, 
@@ -166,6 +167,55 @@ class EpisodeNLQ(object):
         self.state['next_entities'] = next_actions[:, :, 0]
         self.state['current_entities'] = self.current_entities
 
+    def __call__(self, action: np.ndarray) -> Dict[str, np.ndarray]:
+        """
+        Execute an action step in the knowledge graph reasoning environment.
+        
+        Takes the agent's selected actions and transitions all rollouts to new
+        entity positions. Updates the environment state with new current positions
+        and computes the next available actions from those positions.
+        
+        Args:
+            action: Selected action indices [batch_size*total_rollouts] indicating which
+                   next_entity/next_relation pair to follow
+                   
+        Returns:
+            Updated state dictionary containing:
+                - 'current_entities': New current entity positions
+                - 'next_entities': Available next entities from new positions
+                - 'next_relations': Available relations from new positions
+                
+        Note:
+            - Increments the current reasoning step counter
+            - Uses action indices to select from available next_entities
+            - Dynamically computes new action spaces using the grapher (no masking)
+            - State is automatically updated for the next reasoning step
+        """
+        self.current_hop += 1
+        self.current_entities = self.state['next_entities'][np.arange(self.no_examples*self.num_rollouts), action]
+
+        if self.use_stop_signal: 
+            selected_relations = self.state['next_relations'][np.arange(self.no_examples*self.num_rollouts), action]
+
+            stop_action_mask = (selected_relations == self.grapher.rSTOP)  # Identify which agents have selected the STOP action
+            newly_stopped = stop_action_mask & (~self.stopped_mask)        # Identify which agents are newly stopped in this step (i.e., selected STOP now but were not previously stopped)
+            
+            self.stop_steps[newly_stopped] = self.current_hop - 1           # Update stop_steps for newly stopped agents
+
+            self.stopped_mask = np.logical_or(self.stopped_mask, stop_action_mask) # Update stopped_mask to include newly stopped agents (once an agent is stopped, it remains stopped)
+
+        # Update state with new actions from new positions
+        next_actions = self.grapher.return_next_raw_actions(self.current_entities)
+
+        if self.use_stop_signal: next_actions = self.process_stop_actions(next_actions)            
+        if self.use_restart_signal: next_actions = self.process_restart_actions(next_actions)
+
+        self.state['next_relations'] = next_actions[:, :, 1]
+        self.state['next_entities'] = next_actions[:, :, 0]
+        self.state['current_entities'] = self.current_entities
+        return self.state
+
+    # 2) State & observations
     def get_state(self) -> Dict[str, np.ndarray]:
         """
         Get the current state of the reinforcement learning environment.
@@ -189,6 +239,19 @@ class EpisodeNLQ(object):
         """
         return self.state
 
+    def get_effective_path_length(self) -> np.ndarray:
+        """
+        Get the effective path length for each rollout in the current batch.
+        
+        Effective path length is defined as the number of steps taken until the first STOP action is selected (if using STOP signal), or the total number of steps taken if not using STOP signal.
+        This metric provides insight into how long the agent's reasoning paths are, and can be used for analysis or diagnostic purposes.
+        
+        Returns:
+            effective_path_lengths: Array [batch_size*total_rollouts] containing the effective path length for each rollout
+        """
+        return np.clip(self.stop_steps, a_min=0, a_max=self.path_len - 1)
+
+    # 3) Question encoding
     def get_question_embedding(self) -> np.ndarray:
         """
         Get the question embeddings for the current episode batch.
@@ -211,6 +274,8 @@ class EpisodeNLQ(object):
         """
         return self.question_embeddings
 
+    # 4) Reward computation & shaping
+    # 4-a) Core reward
     def get_reward(self) -> np.ndarray:
         """
         Calculate reward signal for the current state of all batches and rollouts.
@@ -244,6 +309,7 @@ class EpisodeNLQ(object):
             reward = np.select(condlist, choicelist)
         return reward
     
+    # 4-b) Answer-hit logic (helpers)
     def _has_hit_answer(self) -> np.ndarray:
         """
         Helper function to check if current entities have hit the target answer entities.
@@ -257,7 +323,7 @@ class EpisodeNLQ(object):
             ])
         else:
             return self.current_entities == self.end_entities
-    
+
     def _reward_to_hit_answer(self, reward: np.ndarray) -> np.ndarray:
         """
         Helper function to determine which rollouts have hit the answer based on the reward array.
@@ -266,6 +332,7 @@ class EpisodeNLQ(object):
         """
         return reward == self.positive_reward
 
+    # 4-c) Post-processing / shaping
     def adjust_rewards(
             self,
             reward: np.ndarray, 
@@ -309,6 +376,94 @@ class EpisodeNLQ(object):
 
         return reward
 
+    # 5) Special action handling
+    def process_stop_actions(self, next_actions: np.ndarray) -> np.ndarray:
+        """
+        If using a STOP signal, we want to ensure that once an agent selects the STOP action,
+        it cannot transition to any new entity in subsequent steps.
+            - We can achieve this by masking out all other actions except the STOP action for that agent in future steps.
+        
+        This function modifies the next_actions array to enforce this constraint based on the stopped_mask.
+        
+        Args:
+            next_actions: The original next actions array [total_rollouts, max_actions, 2] containing entity and relation IDs for each possible action
+        
+        Returns:
+            Modified next_actions array where agents that have selected STOP can only select the STOP action (which keeps them at the same entity) and all other actions are masked out.
+        """
+        for i0 in range(len(self.stopped_mask)):
+            if self.stopped_mask[i0]:
+                next_actions[i0, :, 0] = self.current_entities[i0]      # Stay at current entity
+                next_actions[i0, :, 1] = self.grapher.rPAD              # Mask everything
+                next_actions[i0, 0, 0] = self.current_entities[i0]      # Except STOP
+                next_actions[i0, 0, 1] = self.grapher.rSTOP
+        return next_actions
+
+    def process_restart_actions(self, next_actions: np.ndarray) -> np.ndarray:
+        """
+        If using a RESTART signal, we want to ensure that when an agent selects the RESTART action, it transitions back to the start entity in the next step.
+        This function modifies the next_actions array to enforce this constraint based on the restart_mask. If stop signal is used, the restart action will disappear for stopped agents,
+        so we only apply the restart logic to non-stopped agents.
+
+        Args:
+            next_actions: The original next actions array [total_rollouts, max_actions, 2] containing entity and relation IDs for each possible action
+        Returns:
+            Modified next_actions array where the RESTART action leads back to the start entity for that agent.
+        """
+        restart_mask = (next_actions[:, :, 1] == self.grapher.rRESTART) # Mask to identify which actions are RESTART actions
+        
+        if not np.any(restart_mask):
+            return next_actions  # No RESTART actions, return original next_actions
+        
+        rollout_idx, action_idx = np.where(restart_mask) # Get indices of RESTART actions (not all agents may have a RESTART action, so we check if any exist first)
+
+        next_actions[rollout_idx, action_idx, 0] = self.start_entities[rollout_idx] # Set the next entity for RESTART actions to the start entity for that rollout
+        return next_actions
+
+    # 6) Path utilities & normalization
+    # 6-a) Path access
+    def get_path(self, idx: int) -> Optional[List[List[int]]]:
+        """
+        Get the ground-truth path for a given question index.
+        Returns:
+            List of edges in the path, where each edge is represented as a tuple (head, relation, tail).
+            Returns None if no paths are available.
+        """
+        if self.paths_exists:
+            return self.paths[idx]
+        else:
+            return None
+
+    def get_path_length(self, idx: int) -> int:
+        if self.paths_exists:
+            return len(self.paths[idx])
+        else:
+            return 0
+    
+    # 6-b) Edge / relation helpers
+    def canon_edge(self, h: int, r: int, t: int) -> Tuple[int, int, int]:
+        """
+        Convert an edge to its canonical form (head, relation, tail).
+        If the relation is an inverse token, swap head and tail and map relation back to original.
+        Returns:
+            (h, r, t): Canonical edge representation
+        """
+        if r in self.grapher.inverse_tokens:
+            r = self.grapher.inverse_mapping[r]
+            h, t = t, h
+        return (h, r, t)
+    
+    def is_inverse_rel(self, r_prev: int, r_cur: int) -> bool:
+        # True if r_cur is the inverse token of r_prev OR r_prev is inverse token of r_cur
+        # (assumes inverse_mapping is inverse_token -> base_relation)
+        if r_cur in self.grapher.inverse_tokens and self.grapher.inverse_mapping.get(r_cur) == r_prev:
+            return True
+        if r_prev in self.grapher.inverse_tokens and self.grapher.inverse_mapping.get(r_prev) == r_cur:
+            return True
+        return False
+
+    # 7) Metrics & diagnostics
+    # 7-a) Answer-set metric
     def get_multi_answer_coverage(self) -> Tuple[float, float, float]:
         """
         Calculate multi-answer coverage metrics (recall, precision, F1) for the last nodes reached by all rollouts in the current batch.
@@ -340,45 +495,7 @@ class EpisodeNLQ(object):
 
         return precision, recall, f1_score
 
-    def canon_edge(self, h: int, r: int, t: int) -> Tuple[int, int, int]:
-        """
-        Convert an edge to its canonical form (head, relation, tail).
-        If the relation is an inverse token, swap head and tail and map relation back to original.
-        Returns:
-            (h, r, t): Canonical edge representation
-        """
-        if r in self.grapher.inverse_tokens:
-            r = self.grapher.inverse_mapping[r]
-            h, t = t, h
-        return (h, r, t)
-    
-    def is_inverse_rel(self, r_prev: int, r_cur: int) -> bool:
-        # True if r_cur is the inverse token of r_prev OR r_prev is inverse token of r_cur
-        # (assumes inverse_mapping is inverse_token -> base_relation)
-        if r_cur in self.grapher.inverse_tokens and self.grapher.inverse_mapping.get(r_cur) == r_prev:
-            return True
-        if r_prev in self.grapher.inverse_tokens and self.grapher.inverse_mapping.get(r_prev) == r_cur:
-            return True
-        return False
-
-    def get_path(self, idx: int) -> Optional[List[List[int]]]:
-        """
-        Get the ground-truth path for a given question index.
-        Returns:
-            List of edges in the path, where each edge is represented as a tuple (head, relation, tail).
-            Returns None if no paths are available.
-        """
-        if self.paths_exists:
-            return self.paths[idx]
-        else:
-            return None
-
-    def get_path_length(self, idx: int) -> int:
-        if self.paths_exists:
-            return len(self.paths[idx])
-        else:
-            return 0
-
+    # 7-b) Path similarity metrics
     def get_subgraph_overlap(self, pred_path: List[List[int]], idx: int) -> Tuple[float, float, float]:
         """
         Calculate the subgraph overlap between the predicted path and the ground-truth path for a given question index.
@@ -456,6 +573,7 @@ class EpisodeNLQ(object):
         edit_distance = dp[m][n]
         return edit_distance/(max(m, n) + 1e-8)  # normalize by path length to get a score between 0 and 1
 
+    # 7-c) Coverage metrics
     def get_node_coverage(self, pred_entities: List[int], idx) -> Tuple[float, float, float]:
         """
         Calculate permutation-invariant node-based Path Faithfulness between
@@ -503,6 +621,7 @@ class EpisodeNLQ(object):
         f1_score = 2 * precision * recall / (precision + recall + 1e-8)
         return precision, recall, f1_score
 
+    # 7-d) High-level analysis
     def get_reasoning_diagnostic(self, pred_path: List[List[int]]) -> Tuple[float, float, float, float, float]:
         """
         Compute diagnostic metrics for a predicted reasoning path.
@@ -568,110 +687,6 @@ class EpisodeNLQ(object):
         unique_edges = float(len(unique_edge_set))
         redundancy = 1.0 - (unique_edges / (non_invalid_steps + 1e-8))
         return invalid_step_rate, cycle_rate, backtrack_rate, unique_edges, redundancy
-
-    def process_restart_actions(self, next_actions: np.ndarray) -> np.ndarray:
-        """
-        If using a RESTART signal, we want to ensure that when an agent selects the RESTART action, it transitions back to the start entity in the next step.
-        This function modifies the next_actions array to enforce this constraint based on the restart_mask. If stop signal is used, the restart action will disappear for stopped agents,
-        so we only apply the restart logic to non-stopped agents.
-
-        Args:
-            next_actions: The original next actions array [total_rollouts, max_actions, 2] containing entity and relation IDs for each possible action
-        Returns:
-            Modified next_actions array where the RESTART action leads back to the start entity for that agent.
-        """
-        restart_mask = (next_actions[:, :, 1] == self.grapher.rRESTART) # Mask to identify which actions are RESTART actions
-        
-        if not np.any(restart_mask):
-            return next_actions  # No RESTART actions, return original next_actions
-        
-        rollout_idx, action_idx = np.where(restart_mask) # Get indices of RESTART actions (not all agents may have a RESTART action, so we check if any exist first)
-
-        next_actions[rollout_idx, action_idx, 0] = self.start_entities[rollout_idx] # Set the next entity for RESTART actions to the start entity for that rollout
-        return next_actions
-    
-    def process_stop_actions(self, next_actions: np.ndarray) -> np.ndarray:
-        """
-        If using a STOP signal, we want to ensure that once an agent selects the STOP action,
-        it cannot transition to any new entity in subsequent steps.
-            - We can achieve this by masking out all other actions except the STOP action for that agent in future steps.
-        
-        This function modifies the next_actions array to enforce this constraint based on the stopped_mask.
-        
-        Args:
-            next_actions: The original next actions array [total_rollouts, max_actions, 2] containing entity and relation IDs for each possible action
-        
-        Returns:
-            Modified next_actions array where agents that have selected STOP can only select the STOP action (which keeps them at the same entity) and all other actions are masked out.
-        """
-        for i0 in range(len(self.stopped_mask)):
-            if self.stopped_mask[i0]:
-                next_actions[i0, :, 0] = self.current_entities[i0]      # Stay at current entity
-                next_actions[i0, :, 1] = self.grapher.rPAD              # Mask everything
-                next_actions[i0, 0, 0] = self.current_entities[i0]      # Except STOP
-                next_actions[i0, 0, 1] = self.grapher.rSTOP
-        return next_actions
-
-    def __call__(self, action: np.ndarray) -> Dict[str, np.ndarray]:
-        """
-        Execute an action step in the knowledge graph reasoning environment.
-        
-        Takes the agent's selected actions and transitions all rollouts to new
-        entity positions. Updates the environment state with new current positions
-        and computes the next available actions from those positions.
-        
-        Args:
-            action: Selected action indices [batch_size*total_rollouts] indicating which
-                   next_entity/next_relation pair to follow
-                   
-        Returns:
-            Updated state dictionary containing:
-                - 'current_entities': New current entity positions
-                - 'next_entities': Available next entities from new positions
-                - 'next_relations': Available relations from new positions
-                
-        Note:
-            - Increments the current reasoning step counter
-            - Uses action indices to select from available next_entities
-            - Dynamically computes new action spaces using the grapher (no masking)
-            - State is automatically updated for the next reasoning step
-        """
-        self.current_hop += 1
-        self.current_entities = self.state['next_entities'][np.arange(self.no_examples*self.num_rollouts), action]
-
-        if self.use_stop_signal: 
-            selected_relations = self.state['next_relations'][np.arange(self.no_examples*self.num_rollouts), action]
-
-            stop_action_mask = (selected_relations == self.grapher.rSTOP)  # Identify which agents have selected the STOP action
-            newly_stopped = stop_action_mask & (~self.stopped_mask)        # Identify which agents are newly stopped in this step (i.e., selected STOP now but were not previously stopped)
-            
-            self.stop_steps[newly_stopped] = self.current_hop - 1           # Update stop_steps for newly stopped agents
-
-            self.stopped_mask = np.logical_or(self.stopped_mask, stop_action_mask) # Update stopped_mask to include newly stopped agents (once an agent is stopped, it remains stopped)
-
-        # Update state with new actions from new positions
-        next_actions = self.grapher.return_next_raw_actions(self.current_entities)
-
-        if self.use_stop_signal: next_actions = self.process_stop_actions(next_actions)            
-        if self.use_restart_signal: next_actions = self.process_restart_actions(next_actions)
-
-        self.state['next_relations'] = next_actions[:, :, 1]
-        self.state['next_entities'] = next_actions[:, :, 0]
-        self.state['current_entities'] = self.current_entities
-        return self.state
-
-    def get_effective_path_length(self) -> np.ndarray:
-        """
-        Get the effective path length for each rollout in the current batch.
-        
-        Effective path length is defined as the number of steps taken until the first STOP action is selected (if using STOP signal), or the total number of steps taken if not using STOP signal.
-        This metric provides insight into how long the agent's reasoning paths are, and can be used for analysis or diagnostic purposes.
-        
-        Returns:
-            effective_path_lengths: Array [batch_size*total_rollouts] containing the effective path length for each rollout
-        """
-        return np.clip(self.stop_steps, a_min=0, a_max=self.path_len - 1)
-
 
 class EnvNLQ(object):
     """
