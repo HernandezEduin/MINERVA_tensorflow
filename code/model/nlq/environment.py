@@ -98,7 +98,7 @@ class EpisodeNLQ(object):
         negative_reward: float,
         mode: str,
         multi_answers: bool = False,
-        paths: Optional[List[List[List[str]]]] = None,
+        paths: Optional[List[List[Tuple[int, int, int]]]] = None,
     ) -> None:
         """
         Initialize a reinforcement learning episode for knowledge graph reasoning.
@@ -422,7 +422,7 @@ class EpisodeNLQ(object):
 
     # 6) Path utilities & normalization
     # 6-a) Path access
-    def get_path(self, idx: int) -> Optional[List[List[int]]]:
+    def get_path(self, idx: int) -> Optional[List[Tuple[int, int, int]]]:
         """
         Get the ground-truth path for a given question index.
         Returns:
@@ -464,7 +464,7 @@ class EpisodeNLQ(object):
 
     # 7) Metrics & diagnostics
     # 7-a) Answer-set metric
-    def get_multi_answer_coverage(self) -> Tuple[float, float, float]:
+    def get_multi_answer_coverage(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Calculate multi-answer coverage metrics (recall, precision, F1) for the last nodes reached by all rollouts in the current batch.
         Used to evaluate how well the agent's final positions cover the set of correct answers when multiple answers are possible.
@@ -532,7 +532,7 @@ class EpisodeNLQ(object):
         f1_score = 2 * precision * recall / (precision + recall + 1e-8)
         return precision, recall, f1_score
 
-    def get_path_edit_distance(self, pred_path: List[List[int]], idx) -> float:
+    def get_path_edit_distance(self, pred_path: List[List[int]], idx: int) -> float:
         """
         Calculate the edit distance between the predicted path and the ground-truth path for a given question index.
         Edit distance is defined as the minimum number of edge insertions, deletions, or substitutions required to transform the predicted path into the ground-truth path.
@@ -574,7 +574,7 @@ class EpisodeNLQ(object):
         return edit_distance/(max(m, n) + 1e-8)  # normalize by path length to get a score between 0 and 1
 
     # 7-c) Coverage metrics
-    def get_node_coverage(self, pred_entities: List[int], idx) -> Tuple[float, float, float]:
+    def get_node_coverage(self, pred_entities: List[int], idx: int) -> Tuple[float, float, float]:
         """
         Calculate permutation-invariant node-based Path Faithfulness between
         predicted and ground-truth path for a given question index.
@@ -594,7 +594,7 @@ class EpisodeNLQ(object):
         f1_score = 2 * precision * recall / (precision + recall + 1e-8)
         return precision, recall, f1_score
 
-    def get_relation_coverage(self, pred_relations: List[int], idx) -> Tuple[float, float, float]:
+    def get_relation_coverage(self, pred_relations: List[int], idx: int) -> Tuple[float, float, float]:
         """
         Calculate permutation-invariant relation-based Path Faithfulness between
         predicted and ground-truth path for a given question index.
