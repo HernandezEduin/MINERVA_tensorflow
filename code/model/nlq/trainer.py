@@ -714,9 +714,8 @@ class TrainerNLQ(object):
 
             # Process the results (numpy)
             loss_before_regularization = np.stack(loss_before_regularization, axis=1)
-            raw_rewards = episode.get_reward()  # get environment reward by checking the current position and the answer's position
+            raw_rewards, answer_hits = episode.get_reward()  # get environment reward by checking the current position and the answer's position
             effective_length = episode.get_effective_path_length()  # get the effective length of the episode, which is the step at which the stop signal is given, or the last step if no stop signal is given
-            answer_hits = episode._reward_to_hit_answer(raw_rewards)   
             
             # adjust the rewards based on whether the stop signal is correct or not, if applicable
             adjust_rewards = episode.adjust_rewards(
@@ -726,8 +725,6 @@ class TrainerNLQ(object):
                 stop_penalty=self.stop_signal_penalty,
                 length_penalty=self.length_penalty,
             )
-
-            # adjust_rewards = raw_rewards  # for now, do not adjust the rewards, just use the original rewards from the environment
             
             cum_discounted_reward = self.calc_cum_discounted_reward(adjust_rewards, effective_length)  # computed cumulative discounted reward [B, T]
 
@@ -1034,9 +1031,8 @@ class TrainerNLQ(object):
                 self.entity_trajectory.append(state['current_entities'])
 
             # Calculate the final reward
-            rewards = episode.get_reward()  # [B*test_rollouts]
+            _, answer_hits = episode.get_reward()  # [B*test_rollouts]
             effective_length = episode.get_effective_path_length(clipped=False)
-            answer_hits = episode._reward_to_hit_answer(rewards)  
 
             # Reshape the reward to [orig_batch_size, num_rollouts], to calculate for how many of the
             # entity pair, at least one of the paths arrive at the correct answer

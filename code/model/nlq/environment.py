@@ -280,9 +280,9 @@ class EpisodeNLQ(object):
 
     # 4) Reward computation & shaping
     # 4-a) Core reward
-    def get_reward(self) -> np.ndarray:
+    def get_reward(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Calculate reward signal for the current state of all batches and rollouts.
+        Calculate hits and reward signal for the current state of all batches and rollouts.
         
         Computes binary rewards based on whether agents have reached their
         target entities. Used to train the reinforcement learning policy
@@ -292,6 +292,7 @@ class EpisodeNLQ(object):
             Reward array [batch_size*total_rollouts] containing:
                 - positive_reward: For agents at target entities
                 - negative_reward: For agents not at target entities
+            Hit mask array [batch_size*total_rollouts] indicating which rollouts have hit an answer
                 
         Note:
             - Rewards are computed by comparing current positions to target entities
@@ -300,18 +301,12 @@ class EpisodeNLQ(object):
             - Reward values are configured during environment initialization
         """
         if self.multi_answers:
-            # if any of the answers in the list match current entity, give positive reward (following literature convention)
-            reward = np.array([
-                self.positive_reward if self.current_entities[i] in self.end_entities[i // self.num_rollouts]  # use this if repeating end_entities per rollout
-                else self.negative_reward 
-                for i in range(self.current_entities.shape[0])
-            ])
+            hit_mask = self._has_hit_answer()  # boolean array indicating which rollouts have hit an answer
         else:
-            reward = (self.current_entities == self.end_entities)
-            condlist = [reward == True, reward == False]
-            choicelist = [self.positive_reward, self.negative_reward]
-            reward = np.select(condlist, choicelist)
-        return reward
+            hit_mask = (self.current_entities == self.end_entities)
+
+        reward = np.where(hit_mask, self.positive_reward, self.negative_reward)  # assign rewards based on hit_mask
+        return reward, hit_mask
     
     # 4-b) Answer-hit logic (helpers)
     def _has_hit_answer(self) -> np.ndarray:
