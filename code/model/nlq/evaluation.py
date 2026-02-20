@@ -37,6 +37,8 @@ from code.options import read_options
 logger = logging.getLogger()
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
+# TODO: Update accordingly to changes in trainer
+
 if __name__ == '__main__':
     # Read command line options and setup logging
     options = read_options()
@@ -80,15 +82,18 @@ if __name__ == '__main__':
     # Evaluation phase
     trainer = TrainerNLQ(
         batch_size=options['batch_size'],
+        test_batch_size=options['test_batch_size'],
         num_rollouts=options['num_rollouts'],
+        test_rollouts=options['test_rollouts'],
         positive_reward=options['positive_reward'],
         negative_reward=options['negative_reward'],
         path_length=options['path_length'],
-        test_rollouts=options['test_rollouts'],
         data_input_dir=options['data_input_dir'],
         question_tokenizer_name=options['question_tokenizer_name'],
+        question_format=options['question_format'],
         cached_QAMetaData_path=options['cached_QAMetaData_path'],
         raw_QAData_path=options['raw_QAData_path'],
+        multi_answers=options['multi_answers'],
         max_num_actions=options['max_num_actions'],
         embedding_size=options['embedding_size'],
         hidden_size=options['hidden_size'],
@@ -96,6 +101,9 @@ if __name__ == '__main__':
         train_entity_embeddings=options['train_entity_embeddings'],
         train_relation_embeddings=options['train_relation_embeddings'],
         LSTM_layers=options['LSTM_layers'],
+        projection_adapter=options['projection_adapter'],
+        projection_layers=options['projection_layers'],
+        projection_hidden=options['projection_hidden'],
         learning_rate=options['learning_rate'],
         grad_clip_norm=options['grad_clip_norm'],
         gamma=options['gamma'],
@@ -111,7 +119,13 @@ if __name__ == '__main__':
         seed=options['seed'],
         entity_vocab=entity_vocab, 
         relation_vocab=relation_vocab,
-        use_full_graph=options['use_full_graph'],
+        use_full_graph=options['use_full_graph'], 
+        use_directed_graph=options['use_directed_graph'], 
+        use_stop_signal=options['use_stop_signal'],
+        use_restart_signal=options['use_restart_signal'],
+        stop_signal_reward=options['stop_signal_reward'],
+        stop_signal_penalty=options['stop_signal_penalty'],
+        length_penalty=options['length_penalty'],
         embedding_server=embedding_server,
         use_wandb=False  # Do not use WANDB for Evaluation
     )
@@ -122,16 +136,19 @@ if __name__ == '__main__':
         trainer.initialize(restore=save_path, sess=sess) # check if it is fine to initialize an already trained model or if we need to create one before this line
 
         # create files to store results
-        if options['print_paths']:
+        if options['print_paths'] or options['print_predictions']:
             os.makedirs(os.path.join(path_logger_file, "test_beam"), exist_ok=True)
-            trainer.path_logger_file_ = os.path.join(path_logger_file, "test_beam", "paths")
+            trainer.path_logger_file_ = os.path.join(path_logger_file, "test_beam", "test_paths")
         
         with open(os.path.join(output_dir, 'scores.txt'), 'a') as score_file:
             score_file.write("Test (beam) scores with best model from " + save_path + "\n")
 
         # Perform Evaluation
         trainer.test(sess, beam=options['use_beam'], print_paths=options['print_paths'], save_model=False, mode='test')
-
+        if options['print_predictions']:
+            set_seeds(options['seed']) # Ensure reproducibility for predictions
+            trainer.path_logger_file_ = os.path.join(path_logger_file, "test_beam", "predict_paths")
+            trainer.predict(sess, beam=options['use_beam'], mode='test')
     
     logging.info(f"Evaluation completed. Closing Server")
     embedding_server.close()  # Close the embedding server connection
