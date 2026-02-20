@@ -1827,8 +1827,6 @@ if __name__ == '__main__':
         set_seeds(options['seed'])
         trainer.initialize(restore=save_path, sess=sess) # check if it is fine to initialize an already trained model or if we need to create one before this line
 
-        # trainer.test_rollouts = 100                      # set test rollouts to 100 for evaluation
-
         # create files to store results
         if options['print_paths'] or options['print_predictions']:
             os.makedirs(os.path.join(path_logger_file, "test_beam"), exist_ok=True)
