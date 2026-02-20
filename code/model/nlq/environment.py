@@ -43,44 +43,41 @@ logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 class EpisodeNLQ(object):
     """
-    Single episode manager for natural language question reasoning.
-    
-    Manages the state and dynamics of a single multi-hop reasoning episode where
-    an RL agent navigates through a knowledge graph to answer a natural language
-    question. Supports multiple simultaneous rollouts per question to improve
-    sample efficiency and exploration.
-    
-    The episode tracks the agent's current position, available actions, and provides
-    rewards based on whether the agent reaches the correct answer entity. State
-    includes current entities, possible next actions (relations and target entities),
-    and question context.
-    
+    Single episode manager for natural language question (NLQ) multi-hop reasoning.
+
+    Manages the state and dynamics of a multi-hop reasoning episode where an RL agent
+    navigates a knowledge graph to answer a question. Supports multiple rollouts per
+    question (by repeating the batch) to improve exploration and sample efficiency.
+
+    State includes current entities and the next-step action space (next entities and
+    relations). Rewards are based on whether the rollout ends at a correct answer.
+
     Attributes:
         grapher (RelationEntityGrapher): Knowledge graph navigator
-        batch_size (int): Number of questions in the batch
+        batch_size (int): Number of questions in the batch (unique questions)
         path_len (int): Maximum number of reasoning steps allowed
-        num_rollouts (int): Number of simultaneous paths per question
+        num_rollouts (int): Number of rollouts per question
         mode (str): Current mode ('train', 'dev', or 'test')
-        current_hop (int): Current step number in the reasoning path
-        no_examples (int): Number of unique questions in the batch
-        positive_reward (float): Reward for reaching correct answer
-        negative_reward (float): Reward for incorrect or no answer
-        start_entities (np.ndarray): Starting entity IDs for each rollout
-        end_entities (np.ndarray): Target answer entity IDs for each rollout
-        current_entities (np.ndarray): Current agent positions
-        question_embeddings (np.ndarray): Question embeddings for each rollout
-        question_tokens (List[str]): Original question text tokens
+        no_examples (int): Number of unique questions (same as batch_size)
+        start_entities (np.ndarray): Starting entity IDs repeated per rollout
+        end_entities:
+            - If multi_answers=False: np.ndarray of target entity IDs repeated per rollout
+            - If multi_answers=True: List[Set[int]] of gold answer sets (one set per question)
+        question_embeddings (np.ndarray): Question embeddings repeated per rollout
+        question_tokens (List[str]): Question tokens/text for analysis/logging (not used for transitions)
+        paths (Optional[List[List[Tuple[int,int,int]]]]): Optional ground-truth edge paths (one per question)
         state (Dict[str, np.ndarray]): Current environment state
-        
+
     Example:
         >>> episode = EpisodeNLQ(
         ...     grapher, question_tokens, question_embeddings, start_entities, end_entities,
-        ...     batch_size=128, path_len=3, num_rollouts=20, test_rollouts=100,
-        ...     positive_reward=1.0, negative_reward=-1.0, mode='train'
+        ...     batch_size=128, path_len=3, num_rollouts=20,
+        ...     positive_reward=1.0, negative_reward=0.0, mode='train',
+        ...     multi_answers=False, paths=paths
         ... )
         >>> state = episode.get_state()
-        >>> new_state = episode(action_indices)
-        >>> rewards = episode.get_reward()
+        >>> state = episode(action_indices)
+        >>> reward = episode.get_reward()
     """
 
     # 1) Lifecycle & main interface
@@ -102,30 +99,32 @@ class EpisodeNLQ(object):
     ) -> None:
         """
         Initialize a reinforcement learning episode for knowledge graph reasoning.
-        
+
         Sets up the environment state for multi-path exploration in knowledge graphs,
-        where the agent learns to navigate from start entities to target entities
-        by following relation edges. Supports batch processing with multiple rollouts
-        for improved training efficiency.
-        
+        where the agent learns to navigate from start entities to target entities by
+        following relation edges. Supports batch processing with multiple rollouts.
+
         Args:
-            graph: Knowledge graph navigator providing action spaces and transitions
-            question_tokens: List of question token ints
-            question_embeddings: Question embeddings [batch_size, embedding_dim]
-            start_entities: Starting entity IDs [batch_size]
-            end_entities: Target answer entity IDs [batch_size]
-            batch_size: Number of questions in batch
-            path_len: Maximum reasoning steps allowed
-            num_rollouts: Number of training rollouts per question
-            positive_reward: Reward for correct answers
-            negative_reward: Reward for incorrect answers
-            mode: Current mode ('train', 'dev', or 'test')
-            multi_answers: Whether to handle multiple answers per question
-            paths: Optional list of paths for each question
+            graph: Knowledge graph navigator providing action spaces and transitions.
+            question_tokens: Question tokens/text (kept for analysis/logging).
+            question_embeddings: Question embeddings [batch_size, embedding_dim].
+            start_entities: Starting entity IDs [batch_size].
+            end_entities:
+                - If multi_answers=False: target answer entity IDs [batch_size].
+                - If multi_answers=True: list of answer-ID lists (one list per question).
+            batch_size: Number of questions in batch.
+            path_len: Maximum reasoning steps allowed.
+            num_rollouts: Number of rollouts per question.
+            positive_reward: Reward for correct answers.
+            negative_reward: Reward for incorrect answers.
+            mode: Current mode ('train', 'dev', or 'test').
+            multi_answers: Whether each question can have multiple correct answers.
+            paths: Optional ground-truth paths (one per question), where each path is a list
+                of edges (head, relation, tail) using integer IDs.
+
         Note:
-            - Creates multiple rollouts by repeating each question/entity
-            - Initializes state with available actions from starting positions
-            - Supports different rollout counts for training vs evaluation
+            - Internally repeats start_entities/question_embeddings for multiple rollouts.
+            - For multi_answers=True, end_entities are converted to sets for fast membership tests.
         """
         self.grapher = graph
         self.batch_size = batch_size
@@ -239,17 +238,22 @@ class EpisodeNLQ(object):
         """
         return self.state
 
-    def get_effective_path_length(self) -> np.ndarray:
+    def get_effective_path_length(self, clipped: bool = True) -> np.ndarray:
         """
-        Get the effective path length for each rollout in the current batch.
-        
-        Effective path length is defined as the number of steps taken until the first STOP action is selected (if using STOP signal), or the total number of steps taken if not using STOP signal.
-        This metric provides insight into how long the agent's reasoning paths are, and can be used for analysis or diagnostic purposes.
-        
+        Get the effective path length proxy for each rollout.
+
+        If STOP is used, we track the (0-indexed) step at which STOP was first selected.
+        Rollouts that never STOP are initialized to path_len (i.e. max path length) and 
+        can be optionally clipped to path_len-1 to indicate "no stop" while keeping the 
+        metric in [0, path_len-1].
+
         Returns:
-            effective_path_lengths: Array [batch_size*total_rollouts] containing the effective path length for each rollout
+            Array [batch_size * num_rollouts] containing a value in [0, path_len-1] per rollout:
+                - 0 means STOP immediately (at the first step)
+                - path_len-1 means STOP very late or never STOP (default / clipped)
         """
-        return np.clip(self.stop_steps, a_min=0, a_max=self.path_len - 1)
+        if clipped: return np.clip(self.stop_steps, a_min=0, a_max=self.path_len - 1)
+        return self.stop_steps
 
     # 3) Question encoding
     def get_question_embedding(self) -> np.ndarray:
@@ -425,9 +429,10 @@ class EpisodeNLQ(object):
     def get_path(self, idx: int) -> Optional[List[Tuple[int, int, int]]]:
         """
         Get the ground-truth path for a given question index.
+
         Returns:
-            List of edges in the path, where each edge is represented as a tuple (head, relation, tail).
-            Returns None if no paths are available.
+            A list of edges for the question, where each edge is a tuple (head, relation, tail)
+            using integer IDs; or None if ground-truth paths are not available.
         """
         if self.paths_exists:
             return self.paths[idx]
@@ -435,6 +440,12 @@ class EpisodeNLQ(object):
             return None
 
     def get_path_length(self, idx: int) -> int:
+        """
+        Get the length of the ground-truth path for a given question index.
+
+        Returns:
+            The number of edges in the ground-truth path for the question; or 0 if paths are not available.
+        """
         if self.paths_exists:
             return len(self.paths[idx])
         else:
@@ -454,6 +465,11 @@ class EpisodeNLQ(object):
         return (h, r, t)
     
     def is_inverse_rel(self, r_prev: int, r_cur: int) -> bool:
+        """
+        Check if the current relation is the inverse of the previous relation (i.e., backtracking).
+        Returns:
+            True if r_cur is the inverse token of r_prev OR r_prev is the inverse token of r_cur; False otherwise.
+        """
         # True if r_cur is the inverse token of r_prev OR r_prev is inverse token of r_cur
         # (assumes inverse_mapping is inverse_token -> base_relation)
         if r_cur in self.grapher.inverse_tokens and self.grapher.inverse_mapping.get(r_cur) == r_prev:
@@ -466,16 +482,22 @@ class EpisodeNLQ(object):
     # 7-a) Answer-set metric
     def get_multi_answer_coverage(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Calculate multi-answer coverage metrics (recall, precision, F1) for the last nodes reached by all rollouts in the current batch.
-        Used to evaluate how well the agent's final positions cover the set of correct answers when multiple answers are possible.
+        Calculate multi-answer coverage metrics (precision, recall, F1) per question.
+
+        For each question i, we take the set of final entities reached by its rollouts and compare
+        it against the set of gold answers (end_entities[i]). Metrics are computed per question.
+        
+        Used to evaluate how well the agent's final positions cover the set of correct answers when 
+        multiple answers are possible.
+        
         Returns:
-            precision: Average precision of predicted answers vs gold answers across the batch
-            recall: Average recall of predicted answers vs gold answers across the batch
-            f1_score: Average F1 score of predicted answers vs gold answers across the batch
+            precision: np.ndarray [no_examples] precision per question
+            recall: np.ndarray [no_examples] recall per question
+            f1_score: np.ndarray [no_examples] F1 per question
+
         Note:
-            - Only applicable if multi_answers is True and end_entities are provided as sets of answers
-            - Computes metrics by comparing the unique set of final entities reached by all rollouts for each question against the set of correct answer entities
-            - Provides insight into how well the agent is covering the answer space when multiple correct answers exist
+            - Only meaningful when multi_answers=True.
+            - If multi_answers=False, returns zero arrays (no multi-answer set to compare against).
         """
         recall = np.zeros(self.no_examples, dtype=np.float32)
         precision = np.zeros(self.no_examples, dtype=np.float32)
@@ -498,20 +520,22 @@ class EpisodeNLQ(object):
     # 7-b) Path similarity metrics
     def get_subgraph_overlap(self, pred_path: List[List[int]], idx: int) -> Tuple[float, float, float]:
         """
-        Calculate the subgraph overlap between the predicted path and the ground-truth path for a given question index.
-        DO NOT USE AS A REWARD SIGNAL.
+        Calculate permutation-invariant edge-set overlap between predicted and ground-truth paths.
 
-        - Edges are compared in a permutation-invariant way, so the order of edges in the path does not affect the score. 
-            This allows for more flexible evaluation of reasoning paths that may take different orders but still cover 
-            the same underlying subgraph.
-        - No-op, restarts, and stop signals are ignored in the evaluation since they are not part of 
-            the original graph and do not represent meaningful reasoning steps.
-        - Both paths are compared as sets of edges, so order and multiplicity
-            of edges do not affect the score.
+        Edges are compared as sets (order and multiplicity do not matter). Special tokens
+        (e.g., NO_OP, STOP, RESTART) are ignored.
+
+        Args:
+            pred_path: Sequence of edges (h, r, t) using integer IDs (may include special tokens).
+            idx: Question index into the ground-truth path list.
+
         Returns:
-            precision: Proportion of predicted edges that are in the ground-truth path
-            recall: Proportion of ground-truth edges that are in the predicted path
-            f1_score: Harmonic mean of precision and recall
+            precision: Fraction of predicted edges that appear in the ground-truth path.
+            recall: Fraction of ground-truth edges recovered by the predicted path.
+            f1_score: Harmonic mean of precision and recall.
+
+        Note:
+            DO NOT USE AS A REWARD SIGNAL.
         """
         assert self.paths_exists, "No ground-truth paths available for faithfulness evaluation!"
         gt_path = self.paths[idx]
@@ -534,14 +558,22 @@ class EpisodeNLQ(object):
 
     def get_path_edit_distance(self, pred_path: List[List[int]], idx: int) -> float:
         """
-        Calculate the edit distance between the predicted path and the ground-truth path for a given question index.
-        Edit distance is defined as the minimum number of edge insertions, deletions, or substitutions required to transform the predicted path into the ground-truth path.
+        Compute normalized edit distance between predicted and ground-truth paths.
+
+        Edit distance is computed via dynamic programming over the edge sequences after filtering
+        special tokens (NO_OP/STOP/RESTART). The returned value is normalized by max(m, n), so it
+        lies in [0, 1], where 0 indicates an exact match.
+
+        Args:
+            pred_path: Sequence of edges (h, r, t) using integer IDs (may include special tokens).
+            idx: Question index into the ground-truth path list.
+
         Returns:
-            edit_distance: Integer representing the edit distance between the predicted and ground-truth paths
+            normalized_edit_distance (float): Edit distance / max(len(pred), len(gt)) in [0, 1].
+
         Note:
-            - This is a more strict metric than path faithfulness, as it considers the order and multiplicity of edges.
-            - No-op, restarts, and stop signals are ignored in the evaluation since they are not part of the original graph and do not represent meaningful reasoning steps.
-            - Useful for evaluating how closely the agent's reasoning path matches the exact ground-truth path, but should not be used as a reward signal due to its strictness and potential sparsity.
+            - Stricter than set-based overlap because order matters.
+            - Intended for analysis; typically too strict/sparse for reward shaping.
         """
         assert self.paths_exists, "No ground-truth paths available for edit distance evaluation!"
         gt_path = self.paths[idx]
@@ -576,10 +608,20 @@ class EpisodeNLQ(object):
     # 7-c) Coverage metrics
     def get_node_coverage(self, pred_entities: List[int], idx: int) -> Tuple[float, float, float]:
         """
-        Calculate permutation-invariant node-based Path Faithfulness between
-        predicted and ground-truth path for a given question index.
-        """
+        Compute permutation-invariant node coverage between predicted nodes and ground-truth path nodes.
 
+        Args:
+            pred_entities: List of visited entity IDs (duplicates allowed; evaluated as a set).
+            idx: Question index into the ground-truth path list.
+
+        Returns:
+            precision: Fraction of predicted nodes that are in the ground-truth node set.
+            recall: Fraction of ground-truth nodes that are present in the predicted node set.
+            f1_score: Harmonic mean of precision and recall.
+
+        Note:
+            - Ground-truth node set includes both heads and tails from the ground-truth path.
+        """
         assert self.paths_exists, "No ground-truth paths available for faithfulness evaluation!"
         gt_path = self.paths[idx]
 
@@ -596,12 +638,19 @@ class EpisodeNLQ(object):
 
     def get_relation_coverage(self, pred_relations: List[int], idx: int) -> Tuple[float, float, float]:
         """
-        Calculate permutation-invariant relation-based Path Faithfulness between
-        predicted and ground-truth path for a given question index.
+        Compute permutation-invariant relation coverage between predicted and ground-truth relations.
+
+        Predicted relations are evaluated as a set. Inverse relation tokens are mapped back to their
+        original relation IDs for evaluation, and special tokens (NO_OP/STOP/RESTART) are ignored.
+
+        Args:
+            pred_relations: List of relation IDs used in the predicted rollout (duplicates allowed).
+            idx: Question index into the ground-truth path list.
+
         Returns:
-            precision: Proportion of predicted edges that are in the ground-truth path
-            recall: Proportion of ground-truth edges that are in the predicted path
-            f1_score: Harmonic mean of precision and recall
+            precision: Fraction of predicted relations that appear in the ground-truth relation set.
+            recall: Fraction of ground-truth relations recovered by the predicted relation set.
+            f1_score: Harmonic mean of precision and recall.
         """
         assert self.paths_exists, "No ground-truth paths available for faithfulness evaluation!"
         gt_path = self.paths[idx]
@@ -690,34 +739,22 @@ class EpisodeNLQ(object):
 
 class EnvNLQ(object):
     """
-    Natural Language Query (NLQ) environment for reinforcement learning agents.
-    
-    Manages the complete reinforcement learning setup for knowledge graph reasoning
-    with natural language questions. Combines knowledge graph navigation with 
-    question understanding to train agents that can answer complex queries by
-    traversing multi-hop reasoning paths.
-    
-    This environment serves as the main interface between RL agents and the
-    knowledge graph reasoning task, providing batch processing capabilities
-    and episodic interaction patterns suitable for policy gradient training.
-    
+    Natural Language Question (NLQ) environment for reinforcement learning agents.
+
+    Manages the full NLQ KG-reasoning setup: batching questions/answers, building the
+    knowledge-graph navigator, and yielding EpisodeNLQ objects for training/evaluation.
+
     Attributes:
-        grapher: Knowledge graph navigator for action space management
-        batch_loader: Data generator for question/answer batches
-        mode: Current operation mode ('train', 'dev', or 'test')
-        embedding_server: Service for generating question embeddings
-        
+        grapher (RelationEntityGrapher): Knowledge graph navigator / action-space provider
+        batcher (QuestionBatcher): Batch generator for question/answer data
+        mode (str): Current mode ('train', 'dev', or 'test')
+        embedding_server (Optional[EmbeddingServer]): Optional embedding service used by the batcher
+
     Example:
-        >>> env = EnvNLQ(
-        ...     batch_size=128, num_rollouts=20, positive_reward=1.0, negative_reward=-1.0,
-        ...     path_length=3, test_rollouts=100, data_input_dir="./data", 
-        ...     question_tokenizer_name="bert-base", cached_QAMetaData_path="./cache",
-        ...     raw_QAData_path="./raw", max_num_actions=200,
-        ...     entity_vocab=entity_vocab, relation_vocab=relation_vocab, mode='train'
-        ... )
-        >>> episode = env.get_episodes()
+        >>> env = EnvNLQ(...)
+        >>> episode = next(env.get_episodes())
         >>> state = episode.get_state()
-        >>> new_state = episode(action)
+        >>> state = episode(action)
         >>> reward = episode.get_reward()
     """
     def __init__(
@@ -755,6 +792,7 @@ class EnvNLQ(object):
         
         Args:
             batch_size: Number of questions per training batch
+            test_batch_size: Number of questions per evaluation batch (dev/test)
             num_rollouts: Number of training rollouts per question
             positive_reward: Reward value for reaching correct answer entities
             negative_reward: Reward value for incorrect or no answer

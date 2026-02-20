@@ -1035,7 +1035,7 @@ class TrainerNLQ(object):
 
             # Calculate the final reward
             rewards = episode.get_reward()  # [B*test_rollouts]
-            effective_length = episode.get_effective_path_length()
+            effective_length = episode.get_effective_path_length(clipped=False)
             answer_hits = episode._reward_to_hit_answer(rewards)  
 
             # Reshape the reward to [orig_batch_size, num_rollouts], to calculate for how many of the
