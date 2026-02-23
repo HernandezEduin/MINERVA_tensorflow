@@ -43,9 +43,6 @@ def read_options() -> Dict[str, Any]:
     parser.add_argument("--data_input_dir", default="", type=str,
                         help="Directory containing knowledge graph data files")
 
-    # TODO: Add an option to generate the vocab for the user. This argument is currently unused.
-    parser.add_argument("--create_vocab", default=0, type=str2bool,
-                        help="Whether to create vocabulary files or use existing. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
     parser.add_argument("--vocab_dir", default="", type=str,
                         help="Directory containing entity and relation vocabulary files")
     parser.add_argument("--max_num_actions", default=200, type=int,
@@ -94,7 +91,6 @@ def read_options() -> Dict[str, Any]:
                         help="Hidden size for each layer in the projection adapter (if applicable)")
 
     # Reinforcement Learning
-    # TODO: See if we can modify path length to reasoning length
     parser.add_argument("--path_length", default=3, type=int,
                         help="Maximum number of reasoning steps/hops in the knowledge graph")
     parser.add_argument("--num_rollouts", default=20, type=int,
@@ -135,8 +131,6 @@ def read_options() -> Dict[str, Any]:
                         help="Total number of training iterations")
     parser.add_argument("--eval_every", default=100, type=int,
                         help="Frequency of evaluation (every N training iterations)")
-    parser.add_argument("--nell_evaluation", default='False', type=str2bool,
-                        help="Whether to perform NELL evaluation. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
 
     # Evaluation Config
     parser.add_argument("--pool", default="max", type=str, choices=["max", "sum"],
