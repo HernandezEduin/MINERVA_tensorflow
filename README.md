@@ -7,10 +7,12 @@ This repository extends the original MINERVA with modern TensorFlow compatibilit
 
 ## Project Overview
 
-MINERVA is a reinforcement learning agent that answers queries in knowledge graphs by learning to navigate from source entities to answer entities. This implementation provides two distinct reasoning frameworks:
+MINERVA is a reinforcement learning agent that answers queries in knowledge graphs by learning to navigate from source entities to answer entities.
 
-- **Query-based reasoning** (`query/`): Original MINERVA implementation for structured query answering
-- **Natural Language Question answering** (`nlq/`): Enhanced framework for multi-hop reasoning with natural language questions
+**Branch note:** This **main branch** focuses on the **MultiHop KGQA (NLQ)** task (not the original **Knowledge Graph Completion / Query** task). For the **Query task (Knowledge Graph Completion)** version of MINERVA, use: [minerva_tf1](https://github.com/HernandezEduin/MINERVA/tree/minerva_tf1)
+
+- **Query-based reasoning (Knowledge Graph Completion)**: Original MINERVA setup for completing missing links. Given a query in the form **(h, r, ?)**, the agent must navigate the graph to reach the correct tail entity **t**—with the **direct edge (h, r, t)** masked on the first hop so it must find an alternative multi-hop route.
+- **Natural Language Question Answering (MultiHop KGQA)**: Multi-hop reasoning from natural language. Given a **question**, a **knowledge graph**, and a **start entity**, the agent navigates the graph to arrive at the correct **answer entity**.
 
 ![gif](https://github.com/shehzaadzd/MINERVA/blob/master/images/new.gif)
  _gif courtesy of [Bhuvi Gupta](https://www.linkedin.com/in/bhuvigupta/?originalSubdomain=in)_ 
@@ -20,7 +22,7 @@ MINERVA is a reinforcement learning agent that answers queries in knowledge grap
 ## Requirements
 To install the various Python dependencies (including TensorFlow), make sure you are using **Python 3.9**.
 ```
-pip install -r requirements_cpu_tf2.txt
+pip install -r requirements.txt
 ```
 
 To install the gpu, run the following command in your conda environment
@@ -30,108 +32,65 @@ conda install -c conda-forge cudatoolkit=11.2 cudnn=8.1.0 -y
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 ```
 
-
-## Key Improvements in This Implementation
-
-This enhanced implementation ([HalcyonSolutions/MINERVA](https://github.com/HalcyonSolutions/MINERVA)) significantly improves upon the original [shehzaadzd/MINERVA](https://github.com/shehzaadzd/MINERVA) codebase with modern compatibility and code quality enhancements.
-
-### Environment & Compatibility Upgrades
-- **Modern Python support:** Upgraded to Python 3.9 + `tensorflow-cpu==2.11.1` 
-- **TensorFlow 2.x compatibility:** Preserved graph mode execution with `tf.compat.v1.disable_eager_execution()`
-- **API modernization:** Migrated all TensorFlow APIs to `tf.compat.v1` namespace for future compatibility
-- **Dependency updates:** Replaced deprecated `tf.contrib` modules with modern equivalents
-
-### Code Quality & Architecture Improvements  
-- **Parameter clarity:** Replaced dictionary-based parameter passing with explicit individual variables
-- **Enhanced documentation:** Comprehensive docstrings with type hints for better maintainability
-- **Improved error handling:** Fixed shape mismatch issues and training/testing mode coordination
-- **Modular design:** Clean separation between query and natural language question frameworks
-
-### Framework Extensions
-- **Dual reasoning modes:** 
-  - `query/`: Original structured query reasoning (preserved from authors)
-  - `nlq/`: Enhanced natural language question answering with multi-hop reasoning
-- **Flexible execution:** Separate run scripts (`run_query.sh`, `run_nlq.sh`) for different reasoning tasks
-- **Enhanced evaluation:** Comprehensive metrics and path visualization for both frameworks
-
-
 ## Training
 
-This implementation supports two distinct reasoning frameworks:
-
-### Query-based Reasoning (Original MINERVA)
-Train on structured queries with the original MINERVA framework:
-```bash
-bash run_query.sh configs/query/${dataset}.sh
-```
-
-Example configurations are available in `configs/query/`:
-```bash
-bash run_query.sh configs/query/countries_s3.sh
-bash run_query.sh configs/query/kinship.sh
-bash run_query.sh configs/query/fb15k-237.sh
-```
-
-### Natural Language Question Answering 
 Train on natural language questions with multi-hop reasoning:
 ```bash
-bash run_nlq.sh configs/nlq/${dataset}.sh
+bash run_nlq.sh configs/nlq/${dataset}.yaml
+```
+
+To train with gpu, run:
+```bash
+bash run_nlq.sh configs/nlq/${dataset}.yaml ${gpu-id}
 ```
 
 Example configurations for NLQ are in `configs/nlq/`:
 ```bash
-bash run_nlq.sh configs/nlq/kinshiphinton.sh
+bash run_nlq.sh configs/nlq/mquake.yaml 0
 ```
-
-### Configuration Structure
-- `configs/query/`: Original MINERVA configurations for structured query reasoning
-- `configs/nlq/`: Enhanced configurations for natural language question answering
-- Each config file contains hyperparameters optimized for specific datasets and reasoning tasks
 
 ## Testing
 
-Pre-trained models are available in the [saved_models](https://github.com/HalcyonSolutions/MINERVA/tree/master/saved_models) directory for immediate evaluation.
+Pre-trained models are **not** provided. To evaluate, you must first train a model and then load it for testing.
 
 ### Loading Pre-trained Models
-To use a pre-trained model, modify the configuration file:
-1. Set `load_model=1` 
-2. Set `model_load_dir` to point to the saved model
+To load a previously trained model, update your configuration file:
+1. Set `load_model=True` 
+2. Set `model_load_dir` to point to the saved model (e.g., `saved_models/{your_dataset}/model/model.ckpt`)
 
-#### Query-based Models
-For structured query reasoning, use models in `saved_models/` with query configs:
+### Evaluating 
+For NLQ reasoning, train your own models (or plug in your own datasets) and evaluate with:
 ```bash
-# Example: configs/query/countries_s2.sh
-load_model=1
-model_load_dir="saved_models/countries_s2/model.ckpt"
-```
-
-#### Natural Language Question Models  
-For NLQ reasoning, train your own models or use the framework with your datasets:
-```bash
-bash run_nlq.sh configs/nlq/your_dataset.sh
+bash run_eval.sh configs/nlq/${your_dataset}.yaml
 ```
 
 ## Natural Language Question Answering
 
-The enhanced `nlq/` framework extends MINERVA with sophisticated natural language understanding:
+The enhanced `nlq/` framework extends MINERVA with sophisticated natural language understanding for multi-hop KGQA.
 
 ### Key Features
 - **BERT Integration**: Uses pre-trained language models for question encoding
 - **Multi-hop Reasoning**: Handles complex questions requiring multiple reasoning steps  
 - **Flexible Embeddings**: Supports various question tokenizers and embedding models
-- **Enhanced Evaluation**: Comprehensive metrics including Hits@K and MRR
+- **Enhanced Evaluation**: Comprehensive metrics including Hits@K, MRR, Edit Distance, and Graph Overlap.
 - **Beam Search**: Improved inference with beam search decoding
+- **Restart Signal**: Lets the agent jump back to the start entity and retry with remaining hops
+- **Stop Signal**: Lets the agent stop early at the current entity (before the hop budget is exhausted)
+- **Multi-Answer**: Supports multi-answer training/evaluation (a rollout is correct if it reaches any gold answer)
+- **Multi-Graph-Type**: Evaluates generalization across different graph variants (e.g., full graph, incomplete/pruned graph, directed vs. undirected).
+- **Multi-Question-Format**: Supports multiple question input formats (e.g., full-text, relation-only, graph-only).
+- **Projection Adapter**: Supports multiple question→KG embedding adapters for aligning language embeddings to the KG space (e.g., **Linear**, **MLP**, **Residual**).
 
 ### Question Processing Pipeline
-1. **Tokenization**: Natural language questions are tokenized using configurable models
-2. **Embedding Generation**: Question embeddings created via embedding server
+1. **Tokenization**: Tokenize questions using a configurable tokenizer
+2. **Embedding Generation**: Question embeddings are generated via an external embedding server to avoid TensorFlow 1.x compatibility constraints.
 3. **Graph Navigation**: Agent navigates knowledge graph conditioned on question embeddings
 4. **Answer Retrieval**: Multi-rollout exploration with beam search for robust answers
 
 ### Example Usage
 ```bash
-# Train NLQ model on kinshiphinton dataset
-bash run_nlq.sh configs/nlq/kinshiphinton.sh
+# Train NLQ model on mquake dataset
+bash run_nlq.sh configs/nlq/mquake.yaml
 
 # The framework handles questions like:
 # "Who is the father of John's brother?"
@@ -139,189 +98,45 @@ bash run_nlq.sh configs/nlq/kinshiphinton.sh
 ```
 
 ## Output
-The framework outputs comprehensive evaluation metrics:
-- **Hits@{1,3,5,10,20}**: Answer ranking accuracy at different cutoffs
-- **MRR (Mean Reciprocal Rank)**: Average reciprocal rank of correct answers
-- **Path Visualization**: Detailed reasoning trajectories for analysis
-- **Answer Files**: Complete answer sets with confidence scores
 
-For Countries dataset, MRR corresponds to AUC-PR (Area Under Precision-Recall curve).
+The framework prints and saves a rich set of evaluation artifacts for both **answer accuracy** and **reasoning behavior**.
 
-## Performance (ICASSP)
+### 1) Answer Metrics (Ranking Quality)
+Standard KGQA ranking metrics computed over the candidate answer set:
+- **Hits@{1,3,5,10,20}**: For each question, we generate a fixed number of rollouts (e.g., **100** at test time). Each rollout induces a candidate endpoint answer and is **ranked by the path log-probability** (higher log-prob = more likely under the policy). Hits@K reports the fraction of questions where a gold answer appears among the **top-K rollouts**.
+- **MRR (Mean Reciprocal Rank)**: For each question, compute the rank (by path log-probability) of the first rollout that reaches a gold answer, then average `1 / rank` across questions (higher is better).
 
-### Kinship
-#### Summary Table (Hits@1)
+### 2) Reasoning Diagnostics (Top-Rollout)
+Behavioral statistics computed from the **top-scoring rollout/path per question** (useful for debugging navigation policies):
+- **Special Step Rate**: Fraction of steps that are *special actions* (e.g., **STOP**, **RESTART**, **NO-OP**), depending on the configured action space.
+- **Restart Rate**: How often the agent triggers **RESTART** (jumps back to the start entity and continues with remaining hops).
+- **No-Op Rate**: How often the agent takes **NO-OP** (remains at the current entity).
+- **Cycle Rate**: Frequency of revisiting nodes/edges (looping behavior).
+- **Backtrack Rate**: How often the agent backtracks (more relevant when using an **undirected** graph).
+- **Unique Edges**: Average number of distinct edges traversed per episode (higher ⇒ more exploration).
+- **Redundancy**: Fraction of traversed edges that are repeats (lower ⇒ less wasted motion).
+- **Avg Segment Hops**: Average hops per *effective segment* after truncation and cleanup: the path is truncated between the **last RESTART** and the **first STOP** (if present), and **NO-OP** steps are removed.
 
-| Model / QA Hop Size          | Graph-Type | 1-Hop  | 2-Hop  | 3-Hop  | n-Hop  |
-| ---------------------------- | ---------- | ------ | ------ | ------ | ------ |
-| RW-End                       | Full       | 1.72e-1 | 8.19e-2 | 7.41e-2 | 8.13e-2 |
-| RW-End                       | Train      | 8.11e-2 | 7.46e-2 | 7.09e-2 | 7.43e-2 |
-| RW-Gold                      | Full       | 8.59e-2 | 7.11e-3 | 6.04e-4 | 3.55e-3 |
-| MINERVA ($d_{KG}$=12)        | Full       | 9.38e-1 | 9.84e-1 | 7.55e-1 | 5.20e-1 |
-| MINERVA ($d_{KG}$=12)        | Train      | 9.38e-2 | 7.58e-1 | 6.98e-1 | 6.30e-1 |
+### 3) Endpoint Coverage (Multi-Answer Support)
+For datasets/questions with **multiple valid answers**, we measure whether the *set of endpoints produced across rollouts* actually covers the *set of gold answers* (as opposed to repeatedly predicting the same few answers):
+- **Recall / Precision / F1**: Computed between the set of **unique predicted endpoints** (union over all rollouts for a question) and the set of **gold answer entities**.  
+  This reveals whether the policy **covers all valid answers** or **collapses** onto a small subset across its rollouts.
 
-We report **Hits@1** under two graph regimes:
+### 4) Faithfulness to Ground-Truth Reasoning (When GT Paths Exist)
+If your dataset provides reference reasoning paths, the framework reports faithfulness metrics that compare predicted reasoning against ground-truth (GT) paths.
 
-* **Complete KG** (train+valid+test triples as edges)
-* **Incomplete KG** (train-only edges)
+**Path preprocessing (used for all faithfulness metrics):** We evaluate on a **truncated, cleaned** version of the predicted path: special actions (e.g., **STOP/RESTART/NO-OP**) are removed, and any undirected traversals are converted back into **directed** KG triplets before comparison.
 
-All hyperparameters are shared across hop buckets; only the hop budget **H** varies. For mixed-hop buckets (e.g., 2–4), H is fixed to the bucket maximum.
+- **GT-Edge Overlap (Recall/Precision/F1)**: Treats each path as a **set of directed triplets** (i.e., a small subgraph) and computes overlap with the GT triplet set. This makes the comparison **permutation-invariant** and supports **subgraph-style** evaluation (edge-set match rather than strict step order).
+- **Node-Set Overlap (Recall/Precision/F1)**: Overlap between the **sets of visited entities** in the predicted vs. GT path (order-invariant).
+- **Relation-Set Overlap (Recall/Precision/F1)**: Overlap between the **sets of relations** used in the predicted vs. GT path (order-invariant).
+- **Path Edit Distance (Normalized)**: For *sequence-level* evaluation, we compute the **normalized path edit distance** between the cleaned predicted path and the GT path (lower is better), capturing ordering and structural deviations that edge-set metrics ignore. 
 
----
-
-### Test Results for MINERVA ($d_{KG}$=12) on Full Graph
-
-| QA & Reasoning | MRR     | Hits@1  | Hits@3  | Hits@5  | Hits@10 |
-| -------------- | ------- | ------- | ------- | ------- | ------- |
-| 1-Hop          | 9.69e-1 | 9.38e-1 | 1.00    | 1.00    | 1.00    |
-| 2-Hop          | 9.92e-1 | 9.84e-1 | 1.00    | 1.00    | 1.00    |
-| 3-Hop          | 8.77e-1 | 7.55e-1 | 1.00    | 1.00    | 1.00    |
-| n-Hop          | 5.79e-1 | 5.20e-1 | 5.90e-1 | 6.70e-1 | 7.60e-1 |
-
-#### Example Predicted Paths
-```
-1 Hop Question:
-who is the husband of margaret?
-KG Start : Margaret
-KG GT Ans: Arthur
-Agent Ans: Arthur
-Predicted Path: Margaret --[_wife]--> Arthur
-==============
-2 Hop Question:
-who is the husband of the mother of arthur?
-KG Start : Arthur
-KG GT Ans: Christopher
-Agent Ans: Christopher
-Predicted Path: Arthur --[father]--> Christopher --[NO_OP]--> Christopher
-==============
-3 Hop Question:
-who is the mother of the brother of the wife of charles?
-KG Start : Charles
-KG GT Ans: Christine
-Agent Ans: Christine
-Predicted Path: Charles --[NO_OP]--> Charles --[wife]--> Jennifer --[mother]--> Christine
-```
----
-
-### Test Results for MINERVA ($d_{KG}$=12) on Train Graph
-
-| QA & Reasoning | MRR     | Hits@1  | Hits@3  | Hits@5  | Hits@10 |
-| -------------- | ------- | ------- | ------- | ------- | ------- |
-| 1-Hop          | 2.86e-1 | 9.38e-2 | 3.44e-1 | 5.63e-1 | 6.88e-1 |
-| 2-Hop          | 8.11e-1 | 7.58e-1 | 8.39e-1 | 8.87e-1 | 9.52e-1 |
-| 3-Hop          | 8.23e-1 | 6.98e-1 | 9.62e-1 | 1.00    | 1.00    |
-| n-Hop          | 7.34e-1 | 6.30e-1 | 7.70e-1 | 8.80e-1 | 9.80e-1 |
-
-#### Example Predicted Paths
-```
-1 Hop Question:
-who is the husband of margaret?
-KG Start : Margaret
-KG GT Ans: Arthur
-Agent Ans: Colin
-Predicted Path: Margaret --[nephew]--> Colin
-==============
-2 Hop Question:
-who is the husband of the mother of arthur?
-KG Start : Arthur
-KG GT Ans: Christopher
-Agent Ans: Christopher
-Predicted Path: Arthur --[mother]--> Penelope --[husband]--> Christopher
-==============
-3 Hop Question:
-who is the mother of the brother of the wife of charles?
-KG Start : Charles
-KG GT Ans: Christine
-Agent Ans: Christine
-Predicted Path: Charles --[NO_OP]--> Charles --[wife]--> Jennifer --[mother]--> Christine
-```
-
-### MQuAKE-ST
-#### Summary Table (Hits@1)
-
-| Model / QA Hop Size        | Graph-Type | 2-Hop   | 3-Hop   | 4-Hop   | n-Hop   |
-| -------------------------- | ---------- | ------- | ------- | ------- | ------- |
-| RW-End                     | Full       | 8.53e-3 | 3.61e-3 | 1.55e-3 | 3.39e-3 |
-| RW-End                     | Train      | 8.53e-3 | 3.61e-3 | 1.56e-3 | 3.40e-3 |
-| RW-Gold                    | Full       | 1.55e-3 | 6.69e-6 | 5.00e-8 | 3.26e-5 |
-| **MINERVA ($d_{KG}$=100)** | Full       | 7.16e-1 | 3.62e-1 | 9.06e-1 | 8.16e-1 |
-| **MINERVA ($d_{KG}$=100)** | Train      | 8.63e-1 | 8.54e-1 | 9.61e-1 | 8.65e-1 |
-| MultiHopKG ($d_{KG}$=100)  | Full       | 4.33e-1 | 4.82e-1 | 3.55e-1 | 2.96e-1 |
-| MultiHopKG ($d_{KG}$=100)  | Train      | 3.72e-1 | 3.51e-1 | 3.26e-1 | 3.47e-1 |
-| **SQUIRE ($d_{KG}$=100)**  | Full       | 8.38e-1 | 8.68e-1 | 6.64e-1 | 8.35e-1 |
-| **SQUIRE ($d_{KG}$=100)**  | Train      | 4.99e-1 | 8.15e-1 | 6.74e-1 | 6.75e-1 |
-
----
-
-### Test Results for MINERVA ($d_{KG}$=100) on Full Graph
-
-| QA & Reasoning | Hits@1  | Hits@3  | Hits@5  | Hits@10     | Hits@20 | MRR         |
-| -------------- | ------- | ------- | ------- | ----------- | ------- | ----------- |
-| **2-Hop**      | 7.16e-1 | 8.12e-1 | 8.34e-1 | 8.47e-1     | 8.57e-1 | 7.68e-1     |
-| **3-Hop**      | 3.62e-1 | 3.78e-1 | 3.90e-1 | 4.06e-1     | 4.09e-1 | 3.75e-1     |
-| **4-Hop**      | 9.06e-1 | 9.39e-1 | 9.50e-1 | 9.67e-1     | 9.67e-1 | 9.26e-1     |
-| **n-Hop**      | 8.16e-1 | 8.85e-1 | 9.03e-1 | 9.12e-1     | 9.16e-1 | 8.53e-1     |
-
-#### Example Predicted Paths
-```
-2-Hop:
-Question: what was the genre of the book authored by x1 known as "the early asimov"?
-KG Start : The Early Asimov
-KG GT Ans: science fiction
-Agent Ans: science fiction
-Path: The Early Asimov --[author]--> Isaac Asimov --[genre]--> science fiction
-==============
-
-3-Hop:
-Question: what is the birthplace of the founder of the religion associated with maria christina of austria?
-KG Start : Maria Christina of Austria
-KG GT Ans: Bethlehem
-Agent Ans: Catherine Henriette de Bourbon
-Path: Maria Christina of Austria --[given name]--> Henriette --[No Operation]--> Henriette --[(INV) given name]--> Catherine Henriette de Bourbon
-==============
-
-4-Hop / n-Hop example:
-Question: on which continent was the founder of the company that developed windows live messenger born?
-KG Start : Windows Live Messenger
-KG GT Ans: Asia
-Agent Ans: Asia
-Path: Windows Live Messenger --[developer]--> Microsoft --[board member]--> Satya Nadella --[country of citizenship]--> India --[continent]--> Asia
-```
-
-### Test Results for MINERVA ($d_{KG}$=100) on Train Graph
-
-| QA & Reasoning | Hits@1  | Hits@3  | Hits@5  | Hits@10     | Hits@20     | MRR     |
-| -------------- | ------- | ------- | ------- | ----------- | ----------- | ------- |
-| **2-Hop**      | 8.63e-1 | 9.49e-1 | 9.63e-1 | 9.73e-1     | 9.82e-1     | 9.08e-1 |
-| **3-Hop**      | 8.54e-1 | 8.98e-1 | 9.17e-1 | 9.53e-1     | 9.61e-1     | 8.85e-1 |
-| **4-Hop**      | 9.61e-1 | 9.72e-1 | 9.78e-1 | 9.83e-1     | 9.83e-1     | 9.68e-1 |
-| **n-Hop**      | 8.65e-1 | 9.28e-1 | 9.41e-1 | 9.59e-1     | 9.67e-1     | 9.00e-1 |
-
-#### Example Predicted Paths
-```
-2-Hop:
-Question: what was the genre of the book authored by x1 known as "the early asimov"?
-KG Start : The Early Asimov
-KG GT Ans: science fiction
-Agent Ans: science fiction
-Path: The Early Asimov --[author]--> Isaac Asimov --[genre]--> science fiction
-==============
-
-3-Hop:
-Question: what is the birthplace of the founder of the religion associated with maria christina of austria?
-KG Start : Maria Christina of Austria
-KG GT Ans: Bethlehem
-Agent Ans: Bethlehem
-Path: Maria Christina of Austria --[religion or worldview]--> Catholic Church --[founded by]--> Jesus Christ --[place of birth]--> Bethlehem
-==============
-
-4-Hop / n-Hop example:
-Question: on which continent was the founder of the company that developed windows live messenger born?
-KG Start : Windows Live Messenger
-KG GT Ans: Asia
-Agent Ans: Asia
-Path: Windows Live Messenger --[developer]--> Microsoft --[board member]--> Satya Nadella --[country of citizenship]--> India --[continent]--> Asia
-```
+### 5) Path Logs (Qualitative Debugging)
+Optional per-question traces are written for inspection (see `test_path.txt`-style output). Each entry includes:
+- **Question / Start Entity / Gold Answer / Predicted Answer**
+- **Gold Path vs. Predicted Path** (human-readable), plus the **raw rollout trajectory** with special actions explicitly shown (e.g., **NO-OP**, **RESTART**, **STOP**)
+- **Per-example diagnostics** including **Path F1 (↑)**, **Normalized Edit Distance (↓)**, **Negative Log-Probability (↓)**, **Gold vs. Agent hop counts**, and whether the example is solved (**Hit@1**)
 
 ## Code Structure
 
@@ -330,10 +145,6 @@ The codebase is organized into two main reasoning frameworks:
 ```
 Code/
 ├── Model/
-│   ├── query/                    # Original MINERVA (from authors)
-│   │   ├── trainer.py           # Training pipeline for structured queries
-│   │   ├── agent.py             # RL agent for query reasoning
-│   │   └── environment.py       # Knowledge graph environment
 │   ├── nlq/                     # Natural Language Question answering
 │   │   ├── trainer.py           # Enhanced training pipeline with NLQ support
 │   │   ├── agent.py             # Enhanced agent with question understanding
@@ -341,39 +152,12 @@ Code/
 │   └── baseline.py              # Shared baseline estimator
 ├── Data/
 │   ├── grapher.py               # Knowledge graph navigation
-│   ├── feed_data.py             # Data batching for queries
 │   ├── feed_nlq_data.py         # Data batching for NL questions
 │   ├── embedding_server.py      # Question embedding generation
 │   └── preprocessing_scripts/   # Data preprocessing utilities
 └── Configs/
-    ├── query/                   # Configurations for structured queries
     └── nlq/                     # Configurations for NL questions
 ```
-
-### Key Components
-- **query/**: Preserved original MINERVA implementation for structured query reasoning
-- **nlq/**: Enhanced framework supporting natural language questions with BERT embeddings
-- **Shared components**: Baseline estimator, knowledge graph navigator, and utilities
-- **Dual configuration**: Separate configs for each reasoning mode
-
-## Technical Improvements
-
-### Code Quality Enhancements
-- **Type Safety**: Comprehensive type hints throughout the codebase
-- **Parameter Clarity**: Replaced dictionary-based parameter passing with explicit variables
-- **Documentation**: Detailed docstrings for all classes and methods
-- **Error Handling**: Improved error messages and validation
-
-### Performance & Stability
-- **Shape Consistency**: Fixed TensorFlow shape mismatch issues between training and testing
-- **Memory Management**: Optimized episode processing and garbage collection
-- **Training Stability**: Enhanced baseline variance reduction and gradient clipping
-- **Mode Coordination**: Proper environment mode switching between train/dev/test
-
-### Modern TensorFlow Integration
-- **TF 2.x Compatibility**: Full migration to `tf.compat.v1` namespace
-- **Deprecated API Replacement**: Updated all deprecated TensorFlow functions
-- **Graph Mode Preservation**: Maintained original training dynamics while enabling modern deployment
 
 ## Data Format
 
