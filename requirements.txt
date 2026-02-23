@@ -50,4 +50,4 @@ scikit-learn == 1.6.1
 
 # Configuration management for experiment tracking and reproducibility
 omegaconf == 2.3.0
-wandb == 0.21.1
+wandb >= 0.15.0
