@@ -983,9 +983,8 @@ class TrainerNLQ(object):
             }
 
             ####logger code####
-            if print_paths or self.environment.check_paths_exist():
-                self.entity_trajectory = []
-                self.relation_trajectory = []
+            self.entity_trajectory = []
+            self.relation_trajectory = []
             ####################
 
             self.log_probs = np.zeros((temp_batch_size*effective_rollouts,)) * 1.0
@@ -1052,15 +1051,12 @@ class TrainerNLQ(object):
                     beam_probs = beam_probs.reshape((-1, 1))
 
                     # Path History Maintenance
-                    if print_paths or self.environment.check_paths_exist():
-                        for j in range(i):
-                            self.entity_trajectory[j] = self.entity_trajectory[j][y]
-                            self.relation_trajectory[j] = self.relation_trajectory[j][y]
+                    for j in range(i):
+                        self.entity_trajectory[j] = self.entity_trajectory[j][y]
+                        self.relation_trajectory[j] = self.relation_trajectory[j][y]
                 
-                ####logger code####
-                if print_paths or self.environment.check_paths_exist(): # Store the current path before the environment update
-                    self.entity_trajectory.append(state['current_entities'])
-                    self.relation_trajectory.append(chosen_relation)
+                self.entity_trajectory.append(state['current_entities'])
+                self.relation_trajectory.append(chosen_relation)
                 ####################
 
                 # Update the states for the next hop
@@ -1076,8 +1072,7 @@ class TrainerNLQ(object):
                 self.log_probs = beam_probs
 
             ####Logger code####
-            if print_paths or self.environment.check_paths_exist(): # Store the current paths (entity only)
-                self.entity_trajectory.append(state['current_entities'])
+            self.entity_trajectory.append(state['current_entities'])
 
             # Calculate the final reward
             _, answer_hits = episode.get_reward()  # [B*test_rollouts]
