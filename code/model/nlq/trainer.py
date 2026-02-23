@@ -60,8 +60,13 @@ EvaluationMetrics = namedtuple('EvaluationMetrics', [
     'node_recall', 'node_precision', 'node_f1',
     'rel_recall', 'rel_precision', 'rel_f1',
     'edit_distance',
-    'invalid_step_rate', 'cycle_rate', 'backtrack_rate', 'unique_edges', 'redundancy',
-    'effective_steps',
+    'special_step_rate', 'restart_rate', 'no_op_rate', 'cycle_rate', 
+    'backtrack_rate', 'unique_edges', 'redundancy',
+    'termination_steps', 'termination_rollout', 'segment_hops',
+    'stop_rate', 'correct_stop_rate', 'incorrect_stop_rate', 'hit_wo_stop_rate',
+    'stop_rate_rollout', 'correct_stop_rate_rollout', 'incorrect_stop_rate_rollout', 'hit_wo_stop_rate_rollout',
+    'restart_any_rate', 'post_restart_success_rate', 'restart_and_hit_rate',
+    'restart_any_rate_rollout', 'post_restart_success_rate_rollout', 'restart_and_hit_rate_rollout',
     'mrr', 'max_hits_at_1', 'max_mrr'
 ])
 
@@ -171,6 +176,7 @@ class TrainerNLQ(object):
         stop_signal_reward: float = 0.5,
         stop_signal_penalty: float = -0.5,
         length_penalty: float = 0.0,
+        path_segment_policy: str = "raw",
         use_wandb: bool = False
     ) -> None:
         """
@@ -271,9 +277,12 @@ class TrainerNLQ(object):
         self.use_beam = use_beam
         self.seed = seed
         self.use_wandb = use_wandb
+        self.use_stop_signal = use_stop_signal
+        self.use_restart_signal = use_restart_signal
         self.stop_signal_reward = stop_signal_reward
         self.stop_signal_penalty = stop_signal_penalty
         self.length_penalty = length_penalty
+        self.path_segment_policy = path_segment_policy
 
         # Debug logging for WANDB
         logger.info(f"Trainer initialized with use_wandb={self.use_wandb}")
@@ -557,13 +566,13 @@ class TrainerNLQ(object):
         return train_op
 
 
-    def calc_cum_discounted_reward(self, rewards: np.ndarray, effective_length: np.ndarray) -> np.ndarray:
+    def calc_cum_discounted_reward(self, rewards: np.ndarray, termination_step: np.ndarray) -> np.ndarray:
         """
         Calculate cumulative discounted rewards (returns) for policy gradient training with
         per-episode termination determined by an effective path length.
 
         For each episode i, the terminal reward is placed at the episode’s terminal step
-        t = L_i - 1, where L_i = effective_length[i]. The return is then propagated
+        t = L_i - 1, where L_i = termination_step[i]. The return is then propagated
         backward with discounting:
             G_{i,t} = γ * G_{i,t+1} + R_{i,t}
         where R_{i,t} is zero everywhere except at t = L_i - 1. Timesteps t >= L_i are
@@ -572,7 +581,7 @@ class TrainerNLQ(object):
         Args:
             rewards: Terminal reward per episode.
                 Shape: [batch_size], values typically in {0, +1} or {-1, +1}.
-            effective_length: Number of executed steps until the first STOP action
+            termination_step: Number of executed steps until the first STOP action
                 (inclusive) if using STOP, or the total steps taken otherwise.
                 Shape: [batch_size], assumed clipped to [1, path_length].
 
@@ -591,11 +600,11 @@ class TrainerNLQ(object):
         cum_disc_reward = np.zeros([rewards.shape[0], self.path_length])  # [B, T]
 
         # place terminal reward at t = L-1 (per episode), not always at T-1
-        term_idx = effective_length  # [B], index of terminal step for each episode
+        term_idx = termination_step  # [B], index of terminal step for each episode
         cum_disc_reward[np.arange(rewards.shape[0]), term_idx] = rewards
         for t in reversed(range(self.path_length)):
             running_add = self.gamma * running_add + cum_disc_reward[:, t]
-            running_add[t > effective_length] = 0
+            running_add[t > termination_step] = 0.0
             cum_disc_reward[:, t] = running_add
         return cum_disc_reward
 
@@ -715,7 +724,7 @@ class TrainerNLQ(object):
             # Process the results (numpy)
             loss_before_regularization = np.stack(loss_before_regularization, axis=1)
             raw_rewards, answer_hits = episode.get_reward()  # get environment reward by checking the current position and the answer's position
-            effective_length = episode.get_effective_path_length()  # get the effective length of the episode, which is the step at which the stop signal is given, or the last step if no stop signal is given
+            termination_step = episode.get_termination_step()  # get the effective length of the episode, which is the step at which the stop signal is given, or the last step if no stop signal is given
             
             # adjust the rewards based on whether the stop signal is correct or not, if applicable
             adjust_rewards = episode.adjust_rewards(
@@ -726,7 +735,7 @@ class TrainerNLQ(object):
                 length_penalty=self.length_penalty,
             )
             
-            cum_discounted_reward = self.calc_cum_discounted_reward(adjust_rewards, effective_length)  # computed cumulative discounted reward [B, T]
+            cum_discounted_reward = self.calc_cum_discounted_reward(adjust_rewards, termination_step)  # computed cumulative discounted reward [B, T]
 
             # Backpropagate the results
             batch_total_loss, _ = sess.partial_run(
@@ -857,28 +866,66 @@ class TrainerNLQ(object):
         # i.e., rollout = 5, then Hits@5 = Hits@10 = Hits@20
 
         paths = defaultdict(list)       # Store paths for each question if print_paths is True
-        answers = []                    # Store answers entity for each question if print_paths is True
         feed_dict = {}                  # Feed dictionaries, gets updated each hop during evaluation
         all_final_reward_1 = 0          # Overall results for hits@1
         all_final_reward_3 = 0          # Overall results for hits@3
         all_final_reward_5 = 0          # Overall results for hits@5
         all_final_reward_10 = 0         # Overall results for hits@10
         all_final_reward_20 = 0         # Overall results for hits@20
-        all_final_invalid_step_rate = 0 
+        all_final_special_step_rate = 0 
+        all_final_restart_rate = 0
+        all_final_no_op_rate = 0
         all_final_cycle_rate = 0
         all_final_backtrack_rate = 0
         all_final_unique_edges = 0
         all_final_redundancy = 0
-        all_final_steps = 0
+        all_final_segment_hops = 0
         
-        if self.multi_answers:
-            all_final_answer_recall = 0
-            all_final_answer_precision = 0
-            all_final_answer_f1 = 0
+        all_final_answer_recall = 0
+        all_final_answer_precision = 0
+        all_final_answer_f1 = 0
+
+        if self.use_stop_signal:
+            all_stop_rate = 0.0
+            all_correct_stop_rate = 0.0
+            all_incorrect_stop_rate = 0.0
+            all_hit_wo_stop_rate = 0.0
+            all_final_termination_rollouts = 0
+
+            all_stop_rate_top_rollout = 0.0
+            all_correct_stop_rate_top_rollout = 0.0
+            all_incorrect_stop_rate_top_rollout = 0.0
+            all_hit_wo_stop_rate_top_rollout = 0.0
+            all_final_termination_steps = 0
         else:
-            all_final_answer_recall = None
-            all_final_answer_precision = None
-            all_final_answer_f1 = None
+            all_stop_rate = None
+            all_correct_stop_rate = None
+            all_incorrect_stop_rate = None
+            all_hit_wo_stop_rate = None
+            all_final_termination_rollouts = None
+
+            all_stop_rate_top_rollout = None
+            all_correct_stop_rate_top_rollout = None
+            all_incorrect_stop_rate_top_rollout = None
+            all_hit_wo_stop_rate_top_rollout = None
+            all_final_termination_steps = None
+
+        if self.use_restart_signal:    
+            all_restart_any_rate = 0.0
+            all_post_restart_success_rate = 0.0
+            all_restart_and_hit_rate = 0.0
+
+            all_restart_any_rate_top_rollout = 0.0
+            all_post_restart_success_rate_top_rollout = 0.0
+            all_restart_and_hit_rate_top_rollout = 0.0
+        else:
+            all_restart_any_rate = None
+            all_post_restart_success_rate = None
+            all_restart_and_hit_rate = None
+
+            all_restart_any_rate_top_rollout = None
+            all_post_restart_success_rate_top_rollout = None
+            all_restart_and_hit_rate_top_rollout = None
 
         if self.environment.check_paths_exist():
             all_final_path_recall = 0
@@ -990,9 +1037,11 @@ class TrainerNLQ(object):
                     agent_mem = agent_mem[:, :, y, :]
                     
                     # Keep STOP bookkeeping aligned with the new beam ordering
-                    if getattr(episode, "use_stop_signal", False):
+                    if self.use_stop_signal:
                         episode.stopped_mask = episode.stopped_mask[y]
                         episode.stop_steps = episode.stop_steps[y]
+                    if self.use_restart_signal:
+                        episode.restarted_mask = episode.restarted_mask[y]
 
                     # Override Action Selection
                     test_action_idx = x # Selected actions
@@ -1032,7 +1081,7 @@ class TrainerNLQ(object):
 
             # Calculate the final reward
             _, answer_hits = episode.get_reward()  # [B*test_rollouts]
-            effective_length = episode.get_effective_path_length(clipped=False)
+            termination_step = episode.get_termination_step(clipped=False)
 
             # Reshape the reward to [orig_batch_size, num_rollouts], to calculate for how many of the
             # entity pair, at least one of the paths arrive at the correct answer
@@ -1040,12 +1089,25 @@ class TrainerNLQ(object):
             self.log_probs = np.reshape(self.log_probs, (temp_batch_size, effective_rollouts))
             sorted_indx = np.argsort(-self.log_probs)
 
-            if self.multi_answers:
-                precision, recall, f1_score = episode.get_multi_answer_coverage()
-                all_final_answer_recall += recall.sum()
-                all_final_answer_precision += precision.sum()
-                all_final_answer_f1 += f1_score.sum()
+            precision, recall, f1_score = episode.get_multi_answer_coverage()
+            all_final_answer_recall += recall.sum()
+            all_final_answer_precision += precision.sum()
+            all_final_answer_f1 += f1_score.sum()
+
+            if self.use_stop_signal:
+                stop_rate, correct_stop_rate, incorrect_stop_rate, hit_without_stop_rate = episode.get_stop_quality(answer_hits)
+                all_stop_rate += stop_rate  * temp_batch_size
+                all_correct_stop_rate += correct_stop_rate  * temp_batch_size
+                all_incorrect_stop_rate += incorrect_stop_rate  * temp_batch_size
+                all_hit_wo_stop_rate += hit_without_stop_rate  * temp_batch_size
+                all_final_termination_rollouts = termination_step.mean() * temp_batch_size
             
+            if self.use_restart_signal:
+                restart_any_rate, post_restart_success_rate, restart_and_hit_rate = episode.get_restart_quality(answer_hits)
+                all_restart_any_rate += restart_any_rate  * temp_batch_size
+                all_post_restart_success_rate += post_restart_success_rate  * temp_batch_size
+                all_restart_and_hit_rate += restart_and_hit_rate  * temp_batch_size
+
             # Calculate the episode's metrics based on the sorted indices
             final_reward_1 = 0
             final_reward_3 = 0
@@ -1105,20 +1167,50 @@ class TrainerNLQ(object):
 
                 r = sorted_indx[b][0] # highest scoring path
                 indx = b * effective_rollouts + r           # Convert to global index
-                entities_path = [e[indx] for e in self.entity_trajectory]
-                relations_path = [re[indx] for re in self.relation_trajectory]
+                entities_path_raw = [e[indx] for e in self.entity_trajectory]
+                relations_path_raw = [re[indx] for re in self.relation_trajectory]
 
                 # merge entities and path into a single path
-                merged_path = [[h, r, t] for h, r, t in zip(entities_path[:-1], relations_path, entities_path[1:])]
+                merged_path_raw = [[h, r, t] for h, r, t in zip(entities_path_raw[:-1], relations_path_raw, entities_path_raw[1:])]
 
-                invalid_step_rate, cycle_rate, backtrack_rate, unique_edges, redundancy = episode.get_reasoning_diagnostic(merged_path) # Get diagnostics for this episode and path
-                all_final_invalid_step_rate += invalid_step_rate
+                merged_path = episode.clean_pred_path_for_eval(
+                    merged_path_raw, 
+                    policy=self.path_segment_policy # Evaluate only final attempt and stop at STOP
+                ) # Clean the path for evaluation
+
+                if len(merged_path) == 0:
+                    entities_path = [entities_path_raw[0]]  # keep the starting entity you already had
+                    relations_path = []
+                else:
+                    entities_path = [step[0] for step in merged_path] + [merged_path[-1][2]]
+                    relations_path = [step[1] for step in merged_path]
+
+                special_step_rate, cycle_rate, backtrack_rate, unique_edges, redundancy, restart_rate, no_op_rate = episode.get_reasoning_diagnostic(merged_path_raw) # Get diagnostics for this episode and path
+                all_final_special_step_rate += special_step_rate
                 all_final_cycle_rate += cycle_rate
                 all_final_backtrack_rate += backtrack_rate
                 all_final_unique_edges += unique_edges
                 all_final_redundancy += redundancy
+                all_final_no_op_rate += no_op_rate
+                all_final_restart_rate += restart_rate
 
-                all_final_steps += effective_length[indx]
+                all_final_segment_hops += len(merged_path)          # Total hops taken in the final path (after cleaning)
+
+                if self.use_stop_signal:
+                    sample_hit = answer_hits[indx]
+                    stop_mask = episode.stopped_mask[indx]
+                    all_stop_rate_top_rollout += sample_hit
+                    all_correct_stop_rate_top_rollout += sample_hit & stop_mask
+                    all_incorrect_stop_rate_top_rollout += (1 - sample_hit) & stop_mask
+                    all_hit_wo_stop_rate_top_rollout += sample_hit & (~stop_mask)
+                    all_final_termination_steps += termination_step[indx]   # Total steps taken before STOP
+                
+                if self.use_restart_signal:
+                    sample_hit = answer_hits[indx]
+                    restart_mask = episode.restarted_mask[indx]
+                    all_restart_any_rate_top_rollout += restart_mask
+                    all_post_restart_success_rate_top_rollout += restart_mask & sample_hit
+                    all_restart_and_hit_rate_top_rollout += restart_mask & sample_hit
 
                 if self.environment.check_paths_exist():   # If path existence checking is enabled
                     precision, recall, f1_score = episode.get_subgraph_overlap(merged_path, b)
@@ -1150,7 +1242,7 @@ class TrainerNLQ(object):
                     else:
                         end_e = self.environment.batcher.translate_entities([episode.end_entities[b * effective_rollouts]])[0]  # Map id to entity for answer node
                     
-                    agent_hop = effective_length[indx]
+                    agent_hop = len(merged_path)
 
                     # Check if gold path exists and retrieve it for comparison
                     if self.environment.check_paths_exist():
@@ -1169,6 +1261,8 @@ class TrainerNLQ(object):
 
                     entities_path = self.environment.batcher.translate_entities(entities_path)
                     relations_path = self.environment.batcher.translate_relations(relations_path)
+                    entities_path_raw = self.environment.batcher.translate_entities(entities_path_raw)
+                    relations_path_raw = self.environment.batcher.translate_relations(relations_path_raw)
                     
                     paths[question_txt].append(f"Predicted Ans:    {entities_path[-1]}\n")
 
@@ -1179,6 +1273,11 @@ class TrainerNLQ(object):
                     for ent, rel in zip(entities_path[1:], relations_path):
                         question_path += f" --[{rel}]--> {ent}"
                     paths[question_txt].append(f"Predicted Path:   {question_path}\n")
+
+                    question_path_raw = entities_path_raw[0]
+                    for ent, rel in zip(entities_path_raw[1:], relations_path_raw):
+                        question_path_raw += f" --[{rel}]--> {ent}"
+                    paths[question_txt].append(f"Path (Raw):       {question_path_raw}\n")
 
                     # Print Metrics
                     if self.environment.check_paths_exist(): 
@@ -1208,18 +1307,43 @@ class TrainerNLQ(object):
         all_final_reward_20 /= total_examples
         mrr /= total_examples
 
-        all_final_invalid_step_rate /= total_examples
+        all_final_special_step_rate /= total_examples
+        all_final_restart_rate /= total_examples
+        all_final_no_op_rate /= total_examples
         all_final_cycle_rate /= total_examples
         all_final_backtrack_rate /= total_examples
         all_final_unique_edges /= total_examples
         all_final_redundancy /= total_examples
-        all_final_steps /= total_examples
 
-        if self.multi_answers:
-            all_final_answer_recall /= total_examples
-            all_final_answer_precision /= total_examples
-            all_final_answer_f1 /= total_examples
+        all_final_segment_hops /= total_examples
+
+        all_final_answer_recall /= total_examples
+        all_final_answer_precision /= total_examples
+        all_final_answer_f1 /= total_examples
         
+        if self.use_stop_signal:
+            all_final_termination_rollouts /= total_examples
+            all_final_termination_steps /= total_examples
+
+            all_stop_rate /= total_examples
+            all_correct_stop_rate /= total_examples
+            all_incorrect_stop_rate /= total_examples
+            all_hit_wo_stop_rate /= total_examples
+
+            all_stop_rate_top_rollout /= total_examples
+            all_correct_stop_rate_top_rollout /= total_examples
+            all_incorrect_stop_rate_top_rollout /= total_examples
+            all_hit_wo_stop_rate_top_rollout /= total_examples
+        
+        if self.use_restart_signal:
+            all_restart_any_rate /= total_examples
+            all_post_restart_success_rate /= total_examples
+            all_restart_and_hit_rate /= total_examples
+
+            all_restart_any_rate_top_rollout /= total_examples
+            all_post_restart_success_rate_top_rollout /= total_examples
+            all_restart_and_hit_rate_top_rollout /= total_examples
+
         if self.environment.check_paths_exist():
             all_final_path_recall /= total_examples
             all_final_path_precision /= total_examples
@@ -1273,18 +1397,44 @@ class TrainerNLQ(object):
             score_file.write(f"\tHits@10: {all_final_reward_10:7.4f}\n")
             score_file.write(f"\tHits@20: {all_final_reward_20:7.4f}\n")
             score_file.write(f"\tMRR: {mrr:7.4f}\n")
-            score_file.write(f"Reasoning Diagnostics\n")
-            score_file.write(f"\tInvalid Step Rate: {all_final_invalid_step_rate:7.4f}\n")
+            score_file.write(f"Reasoning Diagnostics (Top-Rollout)\n")
+            score_file.write(f"\tSpecial Step Rate: {all_final_special_step_rate:7.4f}\n")
+            score_file.write(f"\tRestart Rate: {all_final_restart_rate:7.4f}\n")
+            score_file.write(f"\tNo-Op Rate: {all_final_no_op_rate:7.4f}\n")
             score_file.write(f"\tCycle Rate: {all_final_cycle_rate:7.4f}\n")
             score_file.write(f"\tBacktrack Rate: {all_final_backtrack_rate:7.4f}\n")
             score_file.write(f"\tUnique Edges: {all_final_unique_edges:7.4f}\n")
             score_file.write(f"\tRedundancy: {all_final_redundancy:7.4f}\n")
-            score_file.write(f"\tAvg Steps: {all_final_steps:7.4f}\n")
-            if self.multi_answers:
-                score_file.write(f"Multi-Answer Endpoint Coverage Metrics\n")
-                score_file.write(f"\tRecall: {all_final_answer_recall:7.4f}\n")
-                score_file.write(f"\tPrecision: {all_final_answer_precision:7.4f}\n")
-                score_file.write(f"\tF1 Score: {all_final_answer_f1:7.4f}\n")
+            score_file.write(f"\tAvg Segment Hops: {all_final_segment_hops:7.4f}\n")
+            if self.use_stop_signal:
+                score_file.write(f"Stop Quality (Rollout-level)\n")
+                score_file.write(f"\tTermination Step: {all_final_termination_rollouts:7.4f}\n")
+                score_file.write(f"\tStop Rate: {all_stop_rate:7.4f}\n")
+                score_file.write(f"\tCorrect Stop Rate: {all_correct_stop_rate:7.4f}\n")
+                score_file.write(f"\tIncorrect Stop Rate: {all_incorrect_stop_rate:7.4f}\n")
+                score_file.write(f"\tHit without Stop Rate: {all_hit_wo_stop_rate:7.4f}\n")
+
+                score_file.write(f"Stop Quality (Top-Rollout)\n")
+                score_file.write(f"\tTermination Step: {all_final_termination_steps:7.4f}\n")
+                score_file.write(f"\tStop Rate: {all_stop_rate_top_rollout:7.4f}\n")
+                score_file.write(f"\tCorrect Stop Rate: {all_correct_stop_rate_top_rollout:7.4f}\n")
+                score_file.write(f"\tIncorrect Stop Rate: {all_incorrect_stop_rate_top_rollout:7.4f}\n")
+                score_file.write(f"\tHit without Stop Rate: {all_hit_wo_stop_rate_top_rollout:7.4f}\n")
+            if self.use_restart_signal:
+                score_file.write(f"Restart Quality (Rollout-level)\n")
+                score_file.write(f"\tRestart Any Rate: {all_restart_any_rate:7.4f}\n")
+                score_file.write(f"\tPost Restart Success Rate: {all_post_restart_success_rate:7.4f}\n")
+                score_file.write(f"\tRestart and Hit Rate: {all_restart_and_hit_rate:7.4f}\n")
+
+                score_file.write(f"Restart Quality (Top-Rollout)\n")
+                score_file.write(f"\tRestart Any Rate: {all_restart_any_rate_top_rollout:7.4f}\n")
+                score_file.write(f"\tPost Restart Success Rate: {all_post_restart_success_rate_top_rollout:7.4f}\n")
+                score_file.write(f"\tRestart and Hit Rate: {all_restart_and_hit_rate_top_rollout:7.4f}\n")
+            
+            score_file.write(f"Answer(s) Endpoint Coverage Metrics\n")
+            score_file.write(f"\tRecall: {all_final_answer_recall:7.4f}\n")
+            score_file.write(f"\tPrecision: {all_final_answer_precision:7.4f}\n")
+            score_file.write(f"\tF1 Score: {all_final_answer_f1:7.4f}\n")
             if self.environment.check_paths_exist():
                 score_file.write(f"GT-Edge Overlap Metrics\n")
                 score_file.write(f"\tRecall: {all_final_path_recall:7.4f}\n")
@@ -1313,18 +1463,43 @@ class TrainerNLQ(object):
         logger.info(f"\tHits@10: {all_final_reward_10:7.4f}")
         logger.info(f"\tHits@20: {all_final_reward_20:7.4f}")
         logger.info(f"\tMRR: {mrr:7.4f}")
-        logger.info("Reasoning Diagnostics:")
-        logger.info(f"\tInvalid Step Rate: {all_final_invalid_step_rate:7.4f}")
+        logger.info("Reasoning Diagnostics (Top-Rollout):")
+        logger.info(f"\tSpecial Step Rate: {all_final_special_step_rate:7.4f}")
+        logger.info(f"\tRestart Rate: {all_final_restart_rate:7.4f}")
+        logger.info(f"\tNo-Op Rate: {all_final_no_op_rate:7.4f}")
         logger.info(f"\tCycle Rate: {all_final_cycle_rate:7.4f}")
         logger.info(f"\tBacktrack Rate: {all_final_backtrack_rate:7.4f}")
         logger.info(f"\tUnique Edges: {all_final_unique_edges:7.4f}")
         logger.info(f"\tRedundancy: {all_final_redundancy:7.4f}")
-        logger.info(f"\tAvg Steps: {all_final_steps:7.4f}")
-        if self.multi_answers:
-            logger.info("Multi-Answer Endpoint Coverage Metrics:")
-            logger.info(f"\tRecall: {all_final_answer_recall:7.4f}")
-            logger.info(f"\tPrecision: {all_final_answer_precision:7.4f}")
-            logger.info(f"\tF1 Score: {all_final_answer_f1:7.4f}")
+        logger.info(f"\tAvg Segment Hops: {all_final_segment_hops:7.4f}")
+        if self.use_stop_signal:
+            logger.info(f"Stop Quality (Rollout-level):")
+            logger.info(f"\tTermination Step: {all_final_termination_rollouts:7.4f}")
+            logger.info(f"\tStop Rate: {all_stop_rate:7.4f}")
+            logger.info(f"\tCorrect Stop Rate: {all_correct_stop_rate:7.4f}")
+            logger.info(f"\tIncorrect Stop Rate: {all_incorrect_stop_rate:7.4f}")
+            logger.info(f"\tHit without Stop Rate: {all_hit_wo_stop_rate:7.4f}")
+
+            logger.info(f"Stop Quality (Top-Rollout):")
+            logger.info(f"\tTermination Step: {all_final_termination_steps:7.4f}")
+            logger.info(f"\tStop Rate: {all_stop_rate_top_rollout:7.4f}")
+            logger.info(f"\tCorrect Stop Rate (Top Rollout): {all_correct_stop_rate_top_rollout:7.4f}")
+            logger.info(f"\tIncorrect Stop Rate (Top Rollout): {all_incorrect_stop_rate_top_rollout:7.4f}")
+            logger.info(f"\tHit without Stop Rate (Top Rollout): {all_hit_wo_stop_rate_top_rollout:7.4f}")
+        if self.use_restart_signal:
+            logger.info(f"Restart Quality (Rollout-level):")
+            logger.info(f"\tRestart Any Rate: {all_restart_any_rate:7.4f}")
+            logger.info(f"\tPost Restart Success Rate: {all_post_restart_success_rate:7.4f}")
+            logger.info(f"\tRestart and Hit Rate: {all_restart_and_hit_rate:7.4f}")
+
+            logger.info(f"Restart Quality (Top-Rollout):")
+            logger.info(f"\tRestart Any Rate: {all_restart_any_rate_top_rollout:7.4f}")
+            logger.info(f"\tPost Restart Success Rate: {all_post_restart_success_rate_top_rollout:7.4f}")
+            logger.info(f"\tRestart and Hit Rate: {all_restart_and_hit_rate_top_rollout:7.4f}")
+        logger.info("Answer(s) Endpoint Coverage Metrics:")
+        logger.info(f"\tRecall: {all_final_answer_recall:7.4f}")
+        logger.info(f"\tPrecision: {all_final_answer_precision:7.4f}")
+        logger.info(f"\tF1 Score: {all_final_answer_f1:7.4f}")
         if self.environment.check_paths_exist():
             logger.info("GT-Edge Overlap Metrics:")
             logger.info(f"\tRecall: {all_final_path_recall:7.4f}")
@@ -1357,12 +1532,30 @@ class TrainerNLQ(object):
                     hits10=all_final_reward_10,
                     hits20=all_final_reward_20,
                     mrr=mrr,
-                    invalid_step_rate=all_final_invalid_step_rate,
+                    special_step_rate=all_final_special_step_rate,
+                    restart_rate=all_final_restart_rate,
+                    no_op_rate=all_final_no_op_rate,
                     cycle_rate=all_final_cycle_rate,
                     backtrack_rate=all_final_backtrack_rate,
                     unique_edges=all_final_unique_edges,
                     redundancy=all_final_redundancy,
-                    effective_steps=all_final_steps,
+                    segment_hops=all_final_segment_hops,
+                    termination_steps=all_final_termination_steps,
+                    stop_rate=all_stop_rate_top_rollout,
+                    correct_stop_rate=all_correct_stop_rate_top_rollout,
+                    incorrect_stop_rate=all_incorrect_stop_rate_top_rollout,
+                    hit_wo_stop_rate=all_hit_wo_stop_rate_top_rollout,
+                    restart_any_rate=all_restart_any_rate_top_rollout,
+                    post_restart_success_rate=all_post_restart_success_rate_top_rollout,
+                    restart_and_hit_rate=all_restart_and_hit_rate_top_rollout,
+                    termination_rollout=all_final_termination_rollouts,
+                    stop_rate_rollout=all_stop_rate,
+                    correct_stop_rate_rollout=all_correct_stop_rate,
+                    incorrect_stop_rate_rollout=all_incorrect_stop_rate,
+                    hit_wo_stop_rate_rollout=all_hit_wo_stop_rate,
+                    restart_any_rate_rollout=all_restart_any_rate,
+                    post_restart_success_rate_rollout=all_post_restart_success_rate,
+                    restart_and_hit_rate_rollout=all_restart_and_hit_rate,
                     answer_recall=all_final_answer_recall,
                     answer_precision=all_final_answer_precision,
                     answer_f1=all_final_answer_f1,
@@ -1389,12 +1582,30 @@ class TrainerNLQ(object):
             hits_at_10=all_final_reward_10,
             hits_at_20=all_final_reward_20,
             mrr=mrr,
-            invalid_step_rate=all_final_invalid_step_rate,
+            special_step_rate=all_final_special_step_rate,
+            restart_rate=all_final_restart_rate,
+            no_op_rate=all_final_no_op_rate,
             cycle_rate=all_final_cycle_rate,
             backtrack_rate=all_final_backtrack_rate,
             unique_edges=all_final_unique_edges,
             redundancy=all_final_redundancy,
-            effective_steps=all_final_steps,
+            segment_hops=all_final_segment_hops,
+            termination_steps=all_final_termination_steps,
+            stop_rate=all_stop_rate_top_rollout,
+            correct_stop_rate=all_correct_stop_rate_top_rollout,
+            incorrect_stop_rate=all_incorrect_stop_rate_top_rollout,
+            hit_wo_stop_rate=all_hit_wo_stop_rate_top_rollout,
+            restart_any_rate=all_restart_any_rate_top_rollout,
+            post_restart_success_rate=all_post_restart_success_rate_top_rollout,
+            restart_and_hit_rate=all_restart_and_hit_rate_top_rollout,
+            termination_rollout=all_final_termination_rollouts,
+            stop_rate_rollout=all_stop_rate,
+            correct_stop_rate_rollout=all_correct_stop_rate,
+            incorrect_stop_rate_rollout=all_incorrect_stop_rate,
+            hit_wo_stop_rate_rollout=all_hit_wo_stop_rate,
+            restart_any_rate_rollout=all_restart_any_rate,
+            post_restart_success_rate_rollout=all_post_restart_success_rate,
+            restart_and_hit_rate_rollout=all_restart_and_hit_rate,
             max_hits_at_1=max_hits,
             max_mrr=max_mrr,
             answer_recall=all_final_answer_recall,
@@ -1594,12 +1805,14 @@ class TrainerNLQ(object):
             f"{mode}/answer/hits@20": float(vals["hits20"]),
             f"{mode}/answer/mrr": float(vals["mrr"]),
             f"{mode}/total_examples": int(total_examples),
-            f"{mode}/reasoning/invalid_step_rate": float(vals["invalid_step_rate"]),
+            f"{mode}/reasoning/special_step_rate": float(vals["special_step_rate"]),
+            f"{mode}/reasoning/restart_rate": float(vals["restart_rate"]),
+            f"{mode}/reasoning/no_op_rate": float(vals["no_op_rate"]),
             f"{mode}/reasoning/cycle_rate": float(vals["cycle_rate"]),
             f"{mode}/reasoning/backtrack_rate": float(vals["backtrack_rate"]),
             f"{mode}/reasoning/unique_edges": float(vals["unique_edges"]),
             f"{mode}/reasoning/redundancy": float(vals["redundancy"]),
-            f"{mode}/reasoning/effective_steps": float(vals["effective_steps"]),
+            f"{mode}/reasoning/segment_hops": float(vals["segment_hops"]),
         }
 
         optional = {
@@ -1620,6 +1833,26 @@ class TrainerNLQ(object):
             f"{mode}/evidence/relation_overlap/f1": _as_float(vals.get("rel_f1")),
 
             f"{mode}/evidence/path_edit_distance_norm": _as_float(vals.get("edit_distance")),
+
+            f"{mode}/rollout_level/termination_steps": _as_float(vals.get("termination_rollout")),
+            f"{mode}/rollout_level/stop_rate": _as_float(vals.get("stop_rate_rollout")),
+            f"{mode}/rollout_level/correct_stop_rate": _as_float(vals.get("correct_stop_rate_rollout")),
+            f"{mode}/rollout_level/incorrect_stop_rate": _as_float(vals.get("incorrect_stop_rate_rollout")),
+            f"{mode}/rollout_level/hit_without_stop_rate": _as_float(vals.get("hit_wo_stop_rate_rollout")),
+
+            f"{mode}/reasoning/termination_steps": _as_float(vals.get("termination_steps")),
+            f"{mode}/reasoning/stop_rate": _as_float(vals.get("stop_rate")),
+            f"{mode}/reasoning/correct_stop_rate": _as_float(vals.get("correct_stop_rate")),
+            f"{mode}/reasoning/incorrect_stop_rate": _as_float(vals.get("incorrect_stop_rate")),
+            f"{mode}/reasoning/hit_without_stop_rate": _as_float(vals.get("hit_wo_stop_rate")),
+
+            f"{mode}/rollout_level/restart_any_rate": _as_float(vals.get("restart_any_rate_rollout")),
+            f"{mode}/rollout_level/post_restart_success_rate": _as_float(vals.get("post_restart_success_rate_rollout")),
+            f"{mode}/rollout_level/restart_and_hit_rate": _as_float(vals.get("restart_and_hit_rate_rollout")),
+
+            f"{mode}/reasoning/restart_any_rate": _as_float(vals.get("restart_any_rate")),
+            f"{mode}/reasoning/post_restart_success_rate": _as_float(vals.get("post_restart_success_rate")),
+            f"{mode}/reasoning/restart_and_hit_rate": _as_float(vals.get("restart_and_hit_rate")),
         }
 
         wandb.log({**base, **_drop_none(optional)})
@@ -1748,6 +1981,7 @@ if __name__ == '__main__':
             stop_signal_penalty=options['stop_signal_penalty'],
             length_penalty=options['length_penalty'],
             use_restart_signal=options['use_restart_signal'],
+            path_segment_policy=options['path_segment_policy'],
             embedding_server=embedding_server,
             use_wandb=options.get('track', False)
         )
@@ -1818,6 +2052,7 @@ if __name__ == '__main__':
         stop_signal_reward=options['stop_signal_reward'],
         stop_signal_penalty=options['stop_signal_penalty'],
         length_penalty=options['length_penalty'],
+        path_segment_policy=options['path_segment_policy'],
         embedding_server=embedding_server,
         use_wandb=options.get('track', False)  # Enable WANDB for evaluation if tracking is on
     )

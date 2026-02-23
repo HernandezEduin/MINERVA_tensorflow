@@ -36,10 +36,12 @@ from code.data.embedding_server import EmbeddingServer
 from code.data.feed_nlq_data import QuestionBatcher
 from code.data.grapher import RelationEntityGrapher
 
-from typing import Any, Dict, Generator, List, Optional, Set, Union, Tuple
+from typing import Any, Dict, Generator, List, Optional, Set, Union, Tuple, Literal, Sequence
 
 logger = logging.getLogger()
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+
+SegmentPolicy = Literal["raw", "truncate_at_stop", "final_segment", "final_segment_truncate"]
 
 class EpisodeNLQ(object):
     """
@@ -140,7 +142,7 @@ class EpisodeNLQ(object):
         self.negative_reward = negative_reward
         self.use_stop_signal = self.grapher.use_stop_signal
         self.use_restart_signal = self.grapher.use_restart_signal
-        self.cycle_tokens = set([self.grapher.rNO_OP, self.grapher.rSTOP, self.grapher.rRESTART])  # if using stop/restart signals, we want to ignore them in path faithfulness evaluation since they are not part of the original graph
+        self.special_tokens = set([self.grapher.rNO_OP, self.grapher.rSTOP, self.grapher.rRESTART])  # if using stop/restart signals, we want to ignore them in path faithfulness evaluation since they are not part of the original graph
 
         # Repeat entities/embeddings for multiple rollouts per question [batch_size,] -> [batch_size * num_rollouts]
         start_entities = np.repeat(start_entities, self.num_rollouts)
@@ -154,6 +156,7 @@ class EpisodeNLQ(object):
 
         # Track which rollouts have stopped (if using stop signal) to prevent further transitions, but still allow reward calculation at the end of episode
         self.stopped_mask = np.zeros(self.current_entities.shape[0], dtype=bool)
+        self.restarted_mask = np.zeros(self.current_entities.shape[0], dtype=bool)
         self.stop_steps = np.full(self.current_entities.shape[0], fill_value=self.path_len, dtype=int)  # track at which step each rollout stopped, initialized to max path length (i.e. not stopped)
 
         # Initialize state with available actions from starting positions
@@ -202,6 +205,10 @@ class EpisodeNLQ(object):
             self.stop_steps[newly_stopped] = self.current_hop - 1           # Update stop_steps for newly stopped agents
 
             self.stopped_mask = np.logical_or(self.stopped_mask, stop_action_mask) # Update stopped_mask to include newly stopped agents (once an agent is stopped, it remains stopped)
+        if self.use_restart_signal:            
+            selected_relations = self.state['next_relations'][np.arange(self.no_examples*self.num_rollouts), action]
+            restart_action_mask = (selected_relations == self.grapher.rRESTART)
+            self.restarted_mask = np.logical_or(self.restarted_mask, restart_action_mask)
 
         # Update state with new actions from new positions
         next_actions = self.grapher.return_next_raw_actions(self.current_entities)
@@ -238,9 +245,9 @@ class EpisodeNLQ(object):
         """
         return self.state
 
-    def get_effective_path_length(self, clipped: bool = True) -> np.ndarray:
+    def get_termination_step(self, clipped: bool = True) -> np.ndarray:
         """
-        Get the effective path length proxy for each rollout.
+        Get the termination step index for each rollout.
 
         If STOP is used, we track the (0-indexed) step at which STOP was first selected.
         Rollouts that never STOP are initialized to path_len (i.e. max path length) and 
@@ -473,6 +480,57 @@ class EpisodeNLQ(object):
             return True
         return False
 
+    def clean_pred_path_for_eval(
+        self,
+        pred_path: Sequence[Tuple[int, int, int]],
+        policy: SegmentPolicy = "final_segment_truncate",
+    ) -> List[Tuple[int, int, int]]:
+        """
+        Normalize a logged rollout path for evaluation.
+
+        Policies:
+        - raw:                 return as-is (no filtering)
+        - truncate_at_stop:    cut at first STOP (exclusive of STOP edge), keep earlier attempts
+        - final_segment:       keep only edges after last RESTART, keep possible STOP trailing edges
+        - final_segment_truncate: keep only edges after last RESTART and cut at first STOP
+
+        Returns:
+        A list of (h, r, t) edges, still containing KG edges + possibly special edges depending on policy.
+        """
+        if not pred_path:
+            return []
+        
+        if policy == "raw":
+            return list(pred_path)  # no filtering, return as-is
+
+        # --- remove any NO_OP edges (if present) ---
+        pred_path = [edge for edge in pred_path if edge[1] != self.grapher.rNO_OP]
+
+        # --- find first STOP index (if any) ---
+        stop_idx = None
+        if self.use_stop_signal:
+            for i0, (_, r, _) in enumerate(pred_path):
+                if r == self.grapher.rSTOP:
+                    stop_idx = i0
+                    break
+
+        # --- find last RESTART index (if any) ---
+        last_restart_idx = -1
+        if self.use_restart_signal:
+            for i0, (_, r, _) in enumerate(pred_path):
+                if r == self.grapher.rRESTART:
+                    last_restart_idx = i0
+
+        out = list(pred_path)
+
+        if policy in ("truncate_at_stop", "final_segment_truncate") and stop_idx is not None:
+            out = out[:stop_idx]  # exclude the STOP edge and anything after
+
+        if policy in ("final_segment", "final_segment_truncate") and last_restart_idx >= 0:
+            out = out[last_restart_idx + 1 :]  # keep only after last RESTART
+
+        return out
+
     # 7) Metrics & diagnostics
     # 7-a) Answer-set metric
     def get_multi_answer_coverage(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -509,6 +567,17 @@ class EpisodeNLQ(object):
                 recall[i0] = tp / (len(correct_answers) + 1e-8)  # unique answer coverage (recall)
                 precision[i0] = tp / (len(current_answers) + 1e-8)
                 f1_score[i0] = 2 * tp / (len(current_answers) + len(correct_answers) + 1e-8)
+        else:
+            for i0 in range(self.no_examples):
+                rollout_ends = self.current_entities[i0*self.num_rollouts:(i0+1)*self.num_rollouts]
+                current_answers = set(rollout_ends)                 # unique predicted endpoints
+                correct_answer = {self.end_entities[i0*self.num_rollouts]}      # single gold endpoint
+
+                tp = len(current_answers & correct_answer)  # assuming single correct answer in list
+
+                recall[i0] = tp / 1  # either we covered the single correct answer or not
+                precision[i0] = tp / (len(current_answers) + 1e-8)
+                f1_score[i0] = 2 * tp / (len(current_answers) + 1 + 1e-8)
 
         return precision, recall, f1_score
 
@@ -539,7 +608,7 @@ class EpisodeNLQ(object):
         pred_edges = set(
             self.canon_edge(h, r, t)  # map inverse tokens back to their original relation for evaluation purposes (e.g. _relation -> relation)
             for h, r, t in pred_path 
-            if r not in self.cycle_tokens   #   remove cycles and stop/restart signals
+            if r not in self.special_tokens   #   remove cycles and stop/restart signals
         )
         gt_edges = set((h, r, t) for h, r, t in gt_path)
 
@@ -574,12 +643,18 @@ class EpisodeNLQ(object):
         gt_path = self.paths[idx]
 
         # Filter out no-op, restart, and stop signals from both paths
-        pred_path = [self.canon_edge(h, r, t) for h, r, t in pred_path if r not in self.cycle_tokens]
+        pred_path = [self.canon_edge(h, r, t) for h, r, t in pred_path if r not in self.special_tokens]
         gt_path = [(h, r, t) for h, r, t in gt_path]
 
         # Create a matrix to compute edit distance using dynamic programming
         m = len(pred_path)
         n = len(gt_path)
+
+        if m == 0 and n == 0:
+            return 0.0
+        if m == 0 or n == 0:
+            return 1.0  # normalized by max(m,n)
+
         dp = np.zeros((m + 1, n + 1), dtype=int)
 
         for i0 in range(m + 1):
@@ -653,7 +728,7 @@ class EpisodeNLQ(object):
         pred_rels = set(
             self.grapher.inverse_mapping.get(r, r)      # map inverse tokens back to their original relation for evaluation purposes (e.g. _relation -> relation)
             for r in pred_relations
-            if r not in self.cycle_tokens               #   remove cycles and stop/restart signals
+            if r not in self.special_tokens               #   remove cycles and stop/restart signals
         )
         gt_rels = set(r for _, r, _ in gt_path)
 
@@ -666,51 +741,61 @@ class EpisodeNLQ(object):
         return precision, recall, f1_score
 
     # 7-d) High-level analysis
-    def get_reasoning_diagnostic(self, pred_path: List[List[int]]) -> Tuple[float, float, float, float, float]:
+    def get_reasoning_diagnostic(self, pred_path: List[List[int]]) -> Tuple[float, float, float, float, float, float, float]:
         """
         Compute diagnostic metrics for a predicted reasoning path.
 
         This function evaluates the quality of a predicted reasoning path by calculating the following metrics:
         
-        - **Invalid Step Rate**: Fraction of steps that are "special" (e.g., restart, stop, no-op) or involve actions that do not correspond to a valid knowledge graph edge.
+        - **Special Action Rate**: Fraction of steps that are "special" (e.g., restart, stop, no-op) or involve actions that do not correspond to a valid knowledge graph edge.
         - **Cycle Ratio**: Fraction of steps that revisit an entity already visited in the same rollout.
         - **Backtrack Ratio**: Fraction of steps that reverse the immediately previous relation (i.e., backtracking).
         - **Effective Path Length**: Number of unique knowledge graph edges traversed, excluding special tokens.
-        - **Redundancy**: Measures the proportion of redundant edges in the path, calculated as \(1 - \frac{\text{unique\_edges}}{H}\), where \(H\) is the total number of non-invalid steps.
-
+        - **Redundancy**: Measures the proportion of redundant edges in the path, calculated as \(1 - \frac{\text{unique\_edges}}{H}\), where \(H\) is the total number of non-special steps.
+        - **Restart Rate**: Fraction of restart actions in the path.
+        - **No-Op Rate**: Fraction of no-op actions in the path.
         Args:
             pred_path (List[List[int]]): The predicted reasoning path, where each step is represented as a tuple (head, relation, tail).
 
         Returns:
-            Tuple[float, float, float, float, float]: A tuple containing the following diagnostic metrics:
-                - invalid_step_rate (float): Fraction of invalid steps in the path.
+            Tuple[float, float, float, float, float, float, float]: A tuple containing the following diagnostic metrics:
+                - special_action_rate (float): Fraction of special actions in the path.
                 - cycle_rate (float): Fraction of steps revisiting previously visited entities.
                 - backtrack_rate (float): Fraction of steps that backtrack to the previous entity.
                 - unique_edges (float): Number of unique edges traversed in the path.
                 - redundancy (float): Measure of redundant edges in the path.
+                - restart_rate (float): Fraction of restart actions in the path.
+                - no_op_rate (float): Fraction of no-op actions in the path.
 
         Note:
             - Special tokens (e.g., NO_OP, STOP, RESTART) are ignored in the calculation of effective path length and redundancy.
             - These metrics are intended for diagnostic purposes and should not be used as reward signals during training.
         """
-        invalid_steps = 0
+        if not pred_path:
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+        special_steps = 0
         cycle_steps = 0
         backtrack_steps = 0
-        non_invalid_steps = 0
+        non_special_steps = 0
+        restart_steps = 0
+        no_op_steps = 0
 
         visited_nodes: Set[int] = {pred_path[0][0]}
         unique_edge_set: Set[Tuple[int, int, int]] = set()
 
-        for i0, edge in enumerate(pred_path):
-            h, r, t = edge
-
+        for i0, (h, r, t) in enumerate(pred_path):
             # special cycle token (e.g. NO_OP, STOP, RESTART) do not represent meaningful reasoning steps.
-            invalid = r in self.cycle_tokens
-            if invalid:
-                invalid_steps += 1
+            is_special = r in self.special_tokens
+            if is_special:
+                special_steps += 1
+                if r == self.grapher.rRESTART:
+                    restart_steps += 1
+                elif r == self.grapher.rNO_OP:
+                    no_op_steps += 1
                 continue
 
-            non_invalid_steps += 1
+            non_special_steps += 1
 
             # cycle: next node already visited
             if t in visited_nodes:
@@ -724,13 +809,80 @@ class EpisodeNLQ(object):
             visited_nodes.add(t)
             unique_edge_set.add(self.canon_edge(h, r, t))
         
-        invalid_step_rate = invalid_steps / (len(pred_path) + 1e-8)
-        cycle_rate = cycle_steps / (non_invalid_steps + 1e-8)
-        backtrack_rate = backtrack_steps / (non_invalid_steps + 1e-8)
+        special_action_rate = special_steps / (len(pred_path) + 1e-8)
+        restart_rate = restart_steps / (len(pred_path) + 1e-8)
+        no_op_rate = no_op_steps / (len(pred_path) + 1e-8)
+
+        cycle_rate = cycle_steps / (non_special_steps + 1e-8)
+        backtrack_rate = backtrack_steps / (non_special_steps + 1e-8)
 
         unique_edges = float(len(unique_edge_set))
-        redundancy = 1.0 - (unique_edges / (non_invalid_steps + 1e-8))
-        return invalid_step_rate, cycle_rate, backtrack_rate, unique_edges, redundancy
+        redundancy = 1.0 - (unique_edges / (non_special_steps + 1e-8))
+        
+        return special_action_rate, cycle_rate, backtrack_rate, unique_edges, redundancy, restart_rate, no_op_rate
+
+    def get_stop_quality(self, hit_mask: np.ndarray) -> Tuple[float, float, float, float]:
+        """
+        STOP quality diagnostics (rollout-level).
+
+        Returns:
+            stop_rate (float): P(stopped)
+            correct_stop_rate (float): P(stopped and hit)
+            incorrect_stop_rate (float): P(stopped and miss)
+            hit_without_stop_rate (float): P(hit and not stopped)
+
+        Note:
+            - Only meaningful if use_stop_signal=True.
+            - All rates are w.r.t. all rollouts (not conditioned), so they sum sensibly:
+                stop_rate = correct_stop_rate + incorrect_stop_rate
+        """
+        if not self.use_stop_signal:
+            return 0.0, 0.0, 0.0, 0.0
+
+        hit_mask = hit_mask.astype(bool)
+        stopped = self.stopped_mask.astype(bool)
+
+        n = float(hit_mask.shape[0]) + 1e-8
+
+        stop_rate = float(np.sum(stopped) / n)
+        correct_stop_rate = float(np.sum(stopped & hit_mask) / n)
+        incorrect_stop_rate = float(np.sum(stopped & ~hit_mask) / n)
+        hit_without_stop_rate = float(np.sum(~stopped & hit_mask) / n)
+
+        return stop_rate, correct_stop_rate, incorrect_stop_rate, hit_without_stop_rate
+
+    def get_restart_quality(
+        self,
+        hit_mask: np.ndarray,
+    ) -> Tuple[float, float, float]:
+        """
+        RESTART quality diagnostics (rollout-level).
+
+        Args:
+            hit_mask: boolean array [N] final success per rollout.
+
+        Returns:
+            restart_any_rate (float): P(ever_restarted)
+            post_restart_success_rate (float): P(hit | ever_restarted)  (0 if none restarted)
+            restart_and_hit_rate (float): P(ever_restarted and hit)
+
+        Note:
+            - Only meaningful if use_restart_signal=True.
+        """
+        if not self.use_restart_signal:
+            return 0.0, 0.0, 0.0
+
+        hit_mask = hit_mask.astype(bool)
+        ever_restarted = self.restarted_mask.astype(bool)
+
+        n = float(hit_mask.shape[0]) + 1e-8
+        restart_any_rate = float(np.sum(ever_restarted) / n)
+        restart_and_hit_rate = float(np.sum(ever_restarted & hit_mask) / n)
+
+        denom = float(np.sum(ever_restarted)) + 1e-8
+        post_restart_success_rate = float(np.sum(ever_restarted & hit_mask) / denom) if denom > 1e-7 else 0.0
+
+        return restart_any_rate, post_restart_success_rate, restart_and_hit_rate
 
 class EnvNLQ(object):
     """
