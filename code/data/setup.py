@@ -27,20 +27,18 @@ def set_seeds(seed: Union[int, None]) -> None:
     if seed is None:
         return
         
-    import numpy as np
-    import random
-    import tensorflow as tf
     import os
-
-    # Set seeds for all random number generators
-    random.seed(seed)
-    np.random.seed(seed)
-    tf.random.set_seed(seed)
-    
-    # Set environment variables for deterministic behavior
     os.environ['PYTHONHASHSEED'] = str(seed)
     os.environ['TF_DETERMINISTIC_OPS'] = '1'
     os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
+
+    import numpy as np
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+
+    import tensorflow as tf
+    tf.random.set_seed(seed)
 
     # Set seed for transformers library if available
     try:

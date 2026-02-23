@@ -282,6 +282,7 @@ def _worker(model_name: str, req_q: mp.Queue, res_q: mp.Queue) -> None:
 
         # Load model with TensorFlow eager execution enabled
         model = TFAutoModel.from_pretrained(model_name, from_pt=False)
+        model.trainable = False  # Disable training to save memory and speed up inference
 
         while True:
             # Wait for next request
