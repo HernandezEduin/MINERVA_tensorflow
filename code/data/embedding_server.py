@@ -21,7 +21,6 @@ Functions:
     _worker: Internal worker process function for model execution
 """
 
-import os
 import sys
 import signal
 import traceback
@@ -29,8 +28,6 @@ import multiprocessing as mp
 import atexit
 
 import numpy as np
-import tensorflow as tf
-from transformers import TFAutoModel
 
 from typing import Any, Dict, List, Optional, Union
 
@@ -275,9 +272,14 @@ def _worker(model_name: str, req_q: mp.Queue, res_q: mp.Queue) -> None:
         This function runs in a separate process and should not be called directly.
         Communication happens only through the multiprocessing queues.
     """
+    import os
     os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Avoid tokenizer warnings
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     
     try:
+        import tensorflow as tf
+        from transformers import TFAutoModel
+
         # Load model with TensorFlow eager execution enabled
         model = TFAutoModel.from_pretrained(model_name, from_pt=False)
 
