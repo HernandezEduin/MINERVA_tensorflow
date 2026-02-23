@@ -47,3 +47,7 @@ fastparquet == 2024.11.0
 # Machine learning utilities for NLQ evaluation
 # Enhanced evaluation metrics and model analysis
 scikit-learn == 1.6.1
+
+# Configuration management for experiment tracking and reproducibility
+omegaconf == 2.3.0
+wandb == 0.21.1
