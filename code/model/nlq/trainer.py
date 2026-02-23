@@ -25,7 +25,9 @@ from __future__ import absolute_import
 from __future__ import division
 
 import codecs
+import atexit
 import gc
+import signal
 import json
 import logging
 import os
@@ -343,6 +345,18 @@ class TrainerNLQ(object):
         # Training components
         self.baseline = ReactiveBaseline(l=self.Lambda)
         self.optimizer = tf.compat.v1.train.AdamOptimizer(self.learning_rate)
+
+        self._closed = False
+
+        # best-effort cleanup in normal interpreter shutdown
+        atexit.register(self.close)
+
+        # best-effort cleanup on Ctrl+C / kill
+        try:
+            signal.signal(signal.SIGINT, self._signal_close)
+            signal.signal(signal.SIGTERM, self._signal_close)
+        except Exception:
+            pass
 
 
     def calc_reinforce_loss(self) -> tf.Tensor:
@@ -1893,6 +1907,31 @@ class TrainerNLQ(object):
         idx = np.argsort(scores, axis=1)
         idx = idx[:, -k:]  # take the last k highest indices # [B , k]
         return idx.reshape((-1))
+
+    def _signal_close(self, *args):
+        self.close()
+        raise KeyboardInterrupt  # keep default behavior (stop run)
+
+    def close(self):
+        """Release resources best-effort."""
+        if self._closed:
+            return
+        self._closed = True
+
+        # clear TF/Keras global state
+        try:
+            tf.keras.backend.clear_session()
+        except Exception:
+            pass
+
+        gc.collect()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False  # don't suppress exceptions
 
 if __name__ == '__main__':
     # Read command line options and setup logging
