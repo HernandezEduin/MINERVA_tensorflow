@@ -1208,9 +1208,9 @@ class TrainerNLQ(object):
                 if self.use_stop_signal:
                     sample_hit = answer_hits[indx]
                     stop_mask = episode.stopped_mask[indx]
-                    all_stop_rate_top_rollout += sample_hit
+                    all_stop_rate_top_rollout += stop_mask
                     all_correct_stop_rate_top_rollout += sample_hit & stop_mask
-                    all_incorrect_stop_rate_top_rollout += (1 - sample_hit) & stop_mask
+                    all_incorrect_stop_rate_top_rollout += (~sample_hit) & stop_mask
                     all_hit_wo_stop_rate_top_rollout += sample_hit & (~stop_mask)
                     all_final_termination_steps += termination_step[indx]   # Total steps taken before STOP
                 
@@ -1349,8 +1349,8 @@ class TrainerNLQ(object):
             all_post_restart_success_rate /= total_examples
             all_restart_and_hit_rate /= total_examples
 
+            all_post_restart_success_rate_top_rollout /= all_restart_any_rate_top_rollout if all_restart_any_rate_top_rollout > 0 else 0.0
             all_restart_any_rate_top_rollout /= total_examples
-            all_post_restart_success_rate_top_rollout /= total_examples
             all_restart_and_hit_rate_top_rollout /= total_examples
 
         if self.environment.check_paths_exist():
