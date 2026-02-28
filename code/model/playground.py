@@ -14,13 +14,13 @@ def get_args() -> argparse.Namespace:
     ap.add_argument('--mode', type=str, default='train', choices=['train', 'dev', 'test'], help='Mode for the batcher (default: train)')
 
     # KG Dataset
-    ap.add_argument('--data_dir', type=str, default="./datasets/data_preprocessed/mquake", help='Root directory for KG triples and metadata (default: ./data/FB15k)')
+    ap.add_argument('--data_dir', type=str, default="./datasets/nlq/mquake_v2", help='Root directory for KG triples and metadata (default: ./data/FB15k)')
 
     # QA Dataset
-    ap.add_argument('--question_format', type=str, default="full_text", choices=['full_text', 'relation_only', 'graph_only'], help="Format of the question input")
+    ap.add_argument('--question_format', type=str, default="full_text", choices=['full_text', 'paraphrased', 'relation_only', 'graph_only'], help="Format of the question input")
     ap.add_argument('--multi-answers', action='store_true', help="Whether to handle multiple answers per question")
-    ap.add_argument('--raw_QAData_path', type=str, default="./datasets/data_preprocessed/mquake/mquake_qa_nhop.csv", help="Path to the raw QA CSV dataset (default: FreebaseQA)")
-    ap.add_argument('--cached_QAMetaData_path', type=str, default="./.cache/itl/mquake_qa_nhop.json", help="Path to cached tokenized QA metadata JSON file")
+    ap.add_argument('--raw_QAData_path', type=str, default="./datasets/nlq/mquake_v2/mquake_v2_cf9k_qa_nhop.csv", help="Path to the raw QA CSV dataset (default: FreebaseQA)")
+    ap.add_argument('--cached_QAMetaData_path', type=str, default="./.cache/itl/mquake_v2_cf9k_qa_nhop.json", help="Path to cached tokenized QA metadata JSON file")
     ap.add_argument('--force_data_prepro', '-f', action="store_true", help="Force re-processing of QA data, even if cache exists")
 
     'Textual Embedding (LLMs)'
@@ -38,6 +38,7 @@ if __name__ == "__main__":
     batcher = QuestionBatcher(
         input_dir=args.data_dir,
         batch_size=args.batch_size,
+        test_batch_size=args.batch_size,
         question_tokenizer_name = args.question_tokenizer_name,
         question_format=args.question_format,
         multi_answers=args.multi_answers,
@@ -54,17 +55,17 @@ if __name__ == "__main__":
     max_questions = batcher.get_question_num()
     counter = 0
     for data in next_batch_func():
-        questions, q_embeddings, source_ent, ans_ent, paths = data
+        questions, q_embeddings, source_ent, ans_ent, paths, ques_ids = data
         print(batcher.relation_vocab['NO_OP'])
 
         question_text = batcher.translate_questions(questions)
         ent_names = batcher.translate_entities(source_ent)
         ans_ent_name = batcher.translate_entities(ans_ent, dynamic_list=args.multi_answers)
 
-        break
-
         for i0 in range(source_ent.shape[0]):
-            print(f"Batch Questions: {question_text[i0]}, Source Entity: {ent_names[i0]}, Answer Entity: {ans_ent_name[i0]}")
+            print(f"Batch Questions (ID {ques_ids[i0]}): {question_text[i0]}, Source Entity: {ent_names[i0]}, Answer Entity: {ans_ent_name[i0]}")
+
+        break
 
         counter += len(questions)
 

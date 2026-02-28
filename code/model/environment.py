@@ -1035,7 +1035,7 @@ class EnvNLQ(object):
         """
         if self.mode == 'train':
             for data in self.batcher.yield_next_batch_train():
-                question_tokens, question_embeddings, start_entities, end_entities, _ = data
+                question_tokens, question_embeddings, start_entities, end_entities, _, _ = data
                 yield EpisodeNLQ(
                     self.grapher, 
                     question_tokens,
@@ -1055,7 +1055,7 @@ class EnvNLQ(object):
             for data in self.batcher.yield_next_batch_test():
                 if data == None:
                     return
-                question_tokens, question_embeddings, start_entities, end_entities, paths = data
+                question_tokens, question_embeddings, start_entities, end_entities, paths, ques_ids = data
                 yield EpisodeNLQ(
                     self.grapher, 
                     question_tokens,

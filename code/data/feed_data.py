@@ -95,7 +95,6 @@ class QuestionBatcher:
         self.train_metadata: Dict
         self.question_format: str = question_format
         self.multi_answers: bool = multi_answers
-        
         self.train_df, self.dev_df, self.test_df, self.train_metadata = load_qa_data(
             cached_metadata_path=cached_QAMetaData_path,
             raw_QAData_path=raw_QAData_path,
@@ -108,12 +107,13 @@ class QuestionBatcher:
             force_recompute=force_data_prepro,
         )
 
-        # check if paths exist in dev/test sets
-        self.path_exists: bool = True
-        for df in [self.dev_df, self.test_df]:
-            if 'Paths' not in df.columns:
-                self.path_exists = False
-                break
+        self.path_exists = True if self.train_metadata.get("paths_column") is not None else False
+        if question_format == 'paraphrased' and self.train_metadata.get("question_paraphrased_column") is None:
+            raise ValueError("Paraphrased questions are requested but not available in the dataset.")
+        if question_format == 'relation_only' and not(self.path_exists):
+            raise ValueError("Relation-only format is requested but no path information is available in the dataset.")
+        if self.multi_answers and not self.train_metadata.get("is_multi_answer"):
+            raise ValueError("Multi-answer mode is requested but the dataset is not multi-answer.")
 
         # Set initial mode and evaluation dataset
         self.mode: str = mode
@@ -246,11 +246,15 @@ class QuestionBatcher:
             source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)
             answers: Union[np.ndarray, List[List[int]]] = batch['Answer-Entity'].to_numpy(dtype=int) if not self.multi_answers else batch['Answer-Entity'].tolist()
             paths: List[List[List[str, str, str]]] = batch['Paths'].tolist() if self.path_exists else None
+            ques_ids: List[int] = batch['Question-Number'].tolist()
 
             # Extract questions based on the specified format
             if self.question_format == 'full_text':
                 questions: List[List[int]] = batch['Question'].tolist() # already tokenized
-            elif self.question_format == 'relation_only' and self.path_exists:
+            elif self.question_format == 'paraphrased':
+                questions: List[List[int]] = batch['Question-Paraphrased'] # pandas dataframe where each entry is a list of list of token ids, randomly select one paraphrase for each question
+                questions = [q[np.random.randint(0, len(q))] if isinstance(q, list) and len(q) > 0 else [] for q in questions] # handle empty paraphrase lists
+            elif self.question_format == 'relation_only':
                 # extract relation sequences
                 relations_only: List[str] = []
                 for path in paths:
@@ -262,7 +266,7 @@ class QuestionBatcher:
                 questions: List[List[int]] = self.tokenize_questions([""] * len(batch)) 
                 question_embeddings = np.zeros((len(questions), self.get_embedding_dim()), dtype=np.float32)
 
-                yield questions, question_embeddings, source_ent, answers, paths
+                yield questions, question_embeddings, source_ent, answers, paths, ques_ids
                 continue # skip embedding generation
 
             # Generate embeddings via the embedding server
@@ -273,8 +277,7 @@ class QuestionBatcher:
                 sep_id=self.sep_id,
                 max_length=128,
             )
-
-            yield questions, question_embeddings, source_ent, answers, paths
+            yield questions, question_embeddings, source_ent, answers, paths, ques_ids
 
     def yield_next_batch_test(self) -> Generator[Tuple[List[str], Union[np.ndarray, List[List[int]]], np.ndarray, np.ndarray], None, None]:
         """
@@ -312,10 +315,15 @@ class QuestionBatcher:
             source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)
             answers: Union[np.ndarray, List[List[int]]] = batch['Answer-Entity'].to_numpy(dtype=int) if not self.multi_answers else batch['Answer-Entity'].tolist()
             paths: List[List[List[str, str, str]]] = batch['Paths'].tolist() if self.path_exists else None
+            ques_ids: List[int] = batch['Question-Number'].tolist()
 
             # Extract questions based on the specified format
             if self.question_format == 'full_text':
                 questions: List[List[int]] = batch['Question'].tolist() # already tokenized
+            elif self.question_format == 'paraphrased':
+                # TODO: Improve paraphrase selection strategy for evaluation (currently uses the first paraphrase)
+                questions: List[List[int]] = batch['Question-Paraphrased'] # pandas dataframe where each entry is a list of list of token ids, randomly select one paraphrase for each question
+                questions = [q[0] if isinstance(q, list) and len(q) > 0 else [] for q in questions] # for evaluation, use the first paraphrase if available
             elif self.question_format == 'relation_only':
                 # extract relation sequences
                 relations_only: List[str] = []
@@ -328,7 +336,7 @@ class QuestionBatcher:
                 questions: List[List[int]] = self.tokenize_questions([""] * len(batch)) 
                 question_embeddings = np.zeros((len(questions), self.get_embedding_dim()), dtype=np.float32)
 
-                yield questions, question_embeddings, source_ent, answers, paths
+                yield questions, question_embeddings, source_ent, answers, paths, ques_ids
                 continue # skip embedding generation
 
             # Generate embeddings via the embedding server
@@ -340,7 +348,7 @@ class QuestionBatcher:
                 max_length=128,
             )
 
-            yield questions, question_embeddings, source_ent, answers, paths
+            yield questions, question_embeddings, source_ent, answers, paths, ques_ids
 
     def translate_entities(self, entity_ids: np.ndarray, dynamic_list: bool = False) -> List[str]:
         """

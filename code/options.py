@@ -53,8 +53,8 @@ def read_options() -> Dict[str, Any]:
                         help="Whether to treat the graph as directed (no inverse relations) or undirected (include inverse relations). Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
 
     # QA Dataset
-    parser.add_argument("--question_format", default="full_text", type=str, choices=["full_text", "relation_only", "graph_only"],
-                        help="Format of the question input ('full_text', 'relation_only', 'graph_only')")
+    parser.add_argument("--question_format", default="full_text", type=str, choices=["full_text", "paraphrased", "relation_only", "graph_only"],
+                        help="Format of the question input ('full_text', 'paraphrased', 'relation_only', 'graph_only')")
     parser.add_argument('--raw_QAData_path', type=str, default="",
                          help="Path to the raw QA CSV dataset. Only required for NLQ Task.")
     parser.add_argument('--cached_QAMetaData_path', type=str, default="",

@@ -45,8 +45,8 @@ import wandb
 
 from code.data.embedding_server import EmbeddingServer
 from code.model.baseline import ReactiveBaseline
-from code.model.nlq.agent import AgentNLQ
-from code.model.nlq.environment import EnvNLQ
+from code.model.agent import AgentNLQ
+from code.model.environment import EnvNLQ
 from code.data.setup import set_seeds
 from code.options import read_options
 

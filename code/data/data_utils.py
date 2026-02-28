@@ -167,14 +167,22 @@ def process_and_cache_triviaqa_data(
         "CSV file must have at least 3 columns (Question, Source-Entity, Answer-Entity)"
     
     # Extract required columns
+    question_number = csv_df["Question-Number"]
     questions = csv_df["Question"]
     source_ent = csv_df["Source-Entity"] 
     answer_ent = csv_df["Answer-Entity"] if not multi_answers else extract_literals(
         csv_df["Answer-Entity"], flatten=False
     )
+    source_label = csv_df["Source"]
+    answer_label = csv_df["Answer"] if not multi_answers else extract_literals(
+        csv_df["Answer"], flatten=False
+    )
     
     # Extract optional columns
+    questions_paraphrased = extract_literals(csv_df["Question-Paraphrased"]) if 'Question-Paraphrased' in csv_df.columns else None
+    questions_disambiguated = csv_df["Question-Disambiguated"] if 'Question-Disambiguated' in csv_df.columns else None
     paths = extract_literals(csv_df["Paths"]) if 'Paths' in csv_df.columns else None
+    paths_label = csv_df["Paths-Label"] if 'Paths-Label' in csv_df.columns else None
     split_label = csv_df["SplitLabel"] if 'SplitLabel' in csv_df.columns else None
     hops = csv_df["Hops"] if 'Hops' in csv_df.columns else None
 
@@ -186,6 +194,16 @@ def process_and_cache_triviaqa_data(
     tokenized_questions = questions.map(
         lambda x: question_tokenizer.encode(x, add_special_tokens=False)
     )
+    if questions_paraphrased is not None:
+        # paraphrased Questions are List[str], so we tokenize each paraphrase and keep as list of token lists
+        tokenized_questions_paraphrased = questions_paraphrased.map(
+            lambda paraphrase_list: [question_tokenizer.encode(q, add_special_tokens=False) for q in paraphrase_list]
+        )
+
+    if questions_disambiguated is not None:
+        tokenized_questions_disambiguated = questions_disambiguated.map(
+            lambda x: question_tokenizer.encode(x, add_special_tokens=False)
+        )
 
     # Map entities and relations to integer IDs
     mapped_source_ent = source_ent.map(lambda ent: entity2id[ent])
@@ -220,9 +238,15 @@ def process_and_cache_triviaqa_data(
     }
 
     # Combine all processed data into final DataFrame
-    data_columns = [tokenized_questions, mapped_source_ent, mapped_answer_ent]
+    data_columns = [question_number, tokenized_questions, mapped_source_ent, mapped_answer_ent, source_label, answer_label]
+    if questions_paraphrased is not None:
+        data_columns.append(tokenized_questions_paraphrased)
+    if questions_disambiguated is not None:
+        data_columns.append(tokenized_questions_disambiguated)
     if paths is not None:
         data_columns.append(mapped_paths)
+    if paths_label is not None:
+        data_columns.append(paths_label)
     if hops is not None:
         data_columns.append(hops)
     if split_label is not None:
@@ -274,13 +298,20 @@ def process_and_cache_triviaqa_data(
     # Create metadata for reproducibility and documentation
     metadata: Dict[str, Any] = {
         "question_tokenizer": question_tokenizer.name_or_path,
+        "question_number_column": "Question-Number",
         "question_column": "Question",
+        "question_paraphrased_column": "Question-Paraphrased" if questions_paraphrased is not None else None,
+        "question_disambiguated_column": "Question-Disambiguated" if questions_disambiguated is not None else None,
+        "source_label_column": "Source",
         "source_entities_column": "Source-Entity",
+        "answer_label_column": "Answer",
         "answer_entity_column": "Answer-Entity",
-        "paths_column": "Paths",
-        "hops_column": "Hops",
-        "splitLabel_column": "SplitLabel",
-        "zero_indexed_columns": True,
+        "paths_column": "Paths" if paths is not None else None,
+        "paths_label_column": "Paths-Label" if paths_label is not None else None,
+        "hops_column": "Hops" if hops is not None else None,
+        "splitLabel_column": "SplitLabel" if split_label is not None else None,
+        "is_multi_answer": multi_answers,
+        # "zero_indexed_columns": True,
         "date_processed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "saved_paths": cached_split_locations,
         "timestamp": timestamp,
@@ -438,87 +469,3 @@ def load_dictionary(data_dir: str) -> Tuple[Dict[str, int], Dict[str, int], Dict
     id2rel = {v: k for k, v in rel2id.items()}
 
     return ent2id, rel2id, id2ent, id2rel, ent2name, rel2name
-
-def ids_to_embeddings_tf(
-    token_id_batches: List[List[int]],
-    model: Any,  # TensorFlow model with .last_hidden_state output
-    pad_id: int = 0,
-    add_special_tokens: bool = True,
-    cls_id: int = 101,
-    sep_id: int = 102,
-    max_length: Optional[int] = 128,
-) -> tf.Tensor:
-    """
-    Convert token ID sequences to embeddings using a TensorFlow model.
-    
-    Takes variable-length sequences of token IDs, adds special tokens if needed,
-    pads to uniform length, and generates contextualized embeddings using a
-    transformer model. Applies masked mean pooling to create sequence-level
-    representations.
-    
-    Args:
-        token_id_batches: List of token ID sequences (variable length)
-        model: TensorFlow transformer model (e.g., TFAutoModel) that returns
-               outputs with .last_hidden_state attribute
-        pad_id: Token ID used for padding sequences (typically 0 for BERT)
-        add_special_tokens: Whether to add [CLS] and [SEP] tokens if missing
-        cls_id: Classification token ID (typically 101 for BERT)
-        sep_id: Separator token ID (typically 102 for BERT)
-        max_length: Maximum sequence length; longer sequences are truncated
-        
-    Returns:
-        TensorFlow tensor of shape (batch_size, hidden_size) containing
-        mean-pooled embeddings for each input sequence
-        
-    Example:
-        >>> import tensorflow as tf
-        >>> from transformers import TFAutoModel
-        >>> model = TFAutoModel.from_pretrained("bert-base-uncased")
-        >>> sequences = [[2054, 2003], [2129, 2515]]  # "what is", "how does"
-        >>> embeddings = ids_to_embeddings_tf(sequences, model)
-        >>> print(embeddings.shape)  # (2, 768)
-        
-    Note:
-        - Special tokens are added automatically if missing
-        - Sequences are padded to the longest length in the batch
-        - Mean pooling excludes padding tokens using attention masks
-        - Handles empty sequences gracefully
-    """
-    # Add special tokens if requested and missing
-    if add_special_tokens:
-        processed_batches = []
-        for seq in token_id_batches:
-            processed_seq = seq.copy() if seq else []
-            # Add [CLS] at start if missing
-            if not processed_seq or processed_seq[0] != cls_id:
-                processed_seq = [cls_id] + processed_seq
-            # Add [SEP] at end if missing
-            if not processed_seq or processed_seq[-1] != sep_id:
-                processed_seq = processed_seq + [sep_id]
-            processed_batches.append(processed_seq)
-        token_id_batches = processed_batches
-
-    # Truncate sequences if needed
-    if max_length is not None:
-        token_id_batches = [seq[:max_length] for seq in token_id_batches]
-
-    # Convert to padded tensor format
-    rag = tf.ragged.constant(token_id_batches, dtype=tf.int32)
-    lengths = rag.row_lengths()
-    Lmax = tf.reduce_max(lengths) if max_length is None else tf.constant(max_length, dtype=tf.int64)
-    input_ids = rag.to_tensor(shape=[rag.shape[0], Lmax], default_value=pad_id)
-
-    # Create attention mask: 1 for real tokens, 0 for padding
-    attn_mask = tf.sequence_mask(lengths, maxlen=Lmax)
-    attn_mask = tf.cast(attn_mask, tf.int32)
-
-    # Generate embeddings using the model
-    outputs = model(input_ids=input_ids, attention_mask=attn_mask)
-    last_hidden = outputs.last_hidden_state                 # Shape: (batch_size, seq_len, hidden_size)
-
-    # Apply masked mean pooling over non-padding tokens
-    mask = tf.cast(attn_mask, tf.float32)[:, :, None]       # Shape: (batch_size, seq_len, 1)
-    summed = tf.reduce_sum(last_hidden * mask, axis=1)      # Shape: (batch_size, hidden_size)
-    denom = tf.maximum(tf.reduce_sum(mask, axis=1), 1e-9)   # Avoid division by zero
-    
-    return summed / denom                                   # Shape: (batch_size, hidden_size)
