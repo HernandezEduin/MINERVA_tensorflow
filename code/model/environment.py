@@ -33,7 +33,7 @@ import logging
 import numpy as np
 
 from code.data.embedding_server import EmbeddingServer
-from code.data.feed_nlq_data import QuestionBatcher
+from code.data.feed_data import QuestionBatcher
 from code.data.grapher import RelationEntityGrapher
 
 from typing import Any, Dict, Generator, List, Optional, Set, Union, Tuple, Literal, Sequence

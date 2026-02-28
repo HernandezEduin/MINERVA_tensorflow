@@ -145,14 +145,13 @@ The codebase is organized into two main reasoning frameworks:
 ```
 Code/
 ├── Model/
-│   ├── nlq/                     # Natural Language Question answering
-│   │   ├── trainer.py           # Enhanced training pipeline with NLQ support
-│   │   ├── agent.py             # Enhanced agent with question understanding
-│   │   └── environment.py       # Environment with question processing
+│   │── trainer.py               # Enhanced training pipeline with NLQ support
+│   │── agent.py                 # Enhanced agent with question understanding
+│   │── environment.py           # Environment with question processing
 │   └── baseline.py              # Shared baseline estimator
 ├── Data/
 │   ├── grapher.py               # Knowledge graph navigation
-│   ├── feed_nlq_data.py         # Data batching for NL questions
+│   ├── feed_data.py             # Data batching for NL questions
 │   ├── embedding_server.py      # Question embedding generation
 │   └── preprocessing_scripts/   # Data preprocessing utilities
 └── Configs/

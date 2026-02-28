@@ -2,7 +2,7 @@ import argparse
 
 import tensorflow as tf
 
-from code.data.feed_nlq_data import QuestionBatcher
+from code.data.feed_data import QuestionBatcher
 
 import sys
 

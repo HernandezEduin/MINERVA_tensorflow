@@ -26,7 +26,7 @@ tqdm == 4.64.1
 # === NLQ-Specific Requirements ===
 
 # Natural Language Processing and Question Understanding
-# code/model/nlq/: Transformer models for question encoding
+# code/model/: Transformer models for question encoding
 transformers == 4.35.2
 tokenizers < 0.15
 safetensors == 0.3.3
@@ -36,7 +36,7 @@ safetensors == 0.3.3
 huggingface-hub == 0.17.3
 
 # Data processing and CSV handling for question datasets
-# code/data/feed_nlq_data.py: Question batching and preprocessing
+# code/data/feed_data.py: Question batching and preprocessing
 pandas == 2.3.1
 fastparquet == 2024.11.0
 
