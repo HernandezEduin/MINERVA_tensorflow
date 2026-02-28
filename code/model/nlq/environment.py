@@ -366,7 +366,7 @@ class EpisodeNLQ(object):
             incorrect_stop_mask = (~hit_mask) & self.stopped_mask
 
             # ---- length cost in [0,1], 0 = earliest stop, 1 = latest / no stop ----
-            denom = max(1, int(self.current_hop))
+            denom = max(1, int(self.path_len))
             step_cost = (self.stop_steps) / denom  # shape [N], float in [0,1]
 
             # convert to float for reward adjustment calculations
@@ -1035,7 +1035,7 @@ class EnvNLQ(object):
         """
         if self.mode == 'train':
             for data in self.batcher.yield_next_batch_train():
-                question_tokens, question_embeddings, start_entities, end_entities, paths = data
+                question_tokens, question_embeddings, start_entities, end_entities, _ = data
                 yield EpisodeNLQ(
                     self.grapher, 
                     question_tokens,
@@ -1049,7 +1049,7 @@ class EnvNLQ(object):
                     negative_reward=self.negative_reward,
                     mode=self.mode,
                     multi_answers=self.multi_answers,
-                    paths=paths,
+                    paths=None,
                 )
         else:
             for data in self.batcher.yield_next_batch_test():
