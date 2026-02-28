@@ -4,6 +4,8 @@ import tensorflow as tf
 
 from code.data.feed_nlq_data import QuestionBatcher
 
+import sys
+
 def get_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
 
@@ -12,16 +14,20 @@ def get_args() -> argparse.Namespace:
     ap.add_argument('--mode', type=str, default='train', choices=['train', 'dev', 'test'], help='Mode for the batcher (default: train)')
 
     # KG Dataset
-    ap.add_argument('--data_dir', type=str, default="./datasets/data_preprocessed/kinshiphinton", help='Root directory for KG triples and metadata (default: ./data/FB15k)')
+    ap.add_argument('--data_dir', type=str, default="./datasets/data_preprocessed/mquake", help='Root directory for KG triples and metadata (default: ./data/FB15k)')
 
     # QA Dataset
-    ap.add_argument('--raw_QAData_path', type=str, default="./datasets/data_preprocessed/kinshiphinton/kinship_hinton_qa_2hop.csv", help="Path to the raw QA CSV dataset (default: FreebaseQA)")
-    ap.add_argument('--cached_QAMetaData_path', type=str, default="./.cache/itl/kinship_hinton_qa_2hop.json", help="Path to cached tokenized QA metadata JSON file")
+    ap.add_argument('--question_format', type=str, default="full_text", choices=['full_text', 'relation_only', 'graph_only'], help="Format of the question input")
+    ap.add_argument('--multi-answers', action='store_true', help="Whether to handle multiple answers per question")
+    ap.add_argument('--raw_QAData_path', type=str, default="./datasets/data_preprocessed/mquake/mquake_qa_nhop.csv", help="Path to the raw QA CSV dataset (default: FreebaseQA)")
+    ap.add_argument('--cached_QAMetaData_path', type=str, default="./.cache/itl/mquake_qa_nhop.json", help="Path to cached tokenized QA metadata JSON file")
     ap.add_argument('--force_data_prepro', '-f', action="store_true", help="Force re-processing of QA data, even if cache exists")
 
     'Textual Embedding (LLMs)'
     ap.add_argument("--question_tokenizer_name", type=str, default="bert-base-uncased", help="Tokenizer name for question embeddings")
     ap.add_argument("--answer_tokenizer_name", type=str, default="facebook/bart-base", help="Tokenizer name for answer embeddings")
+
+    ap.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility (default: 42)')
 
     return ap.parse_args()
 
@@ -33,10 +39,12 @@ if __name__ == "__main__":
         input_dir=args.data_dir,
         batch_size=args.batch_size,
         question_tokenizer_name = args.question_tokenizer_name,
+        question_format=args.question_format,
+        multi_answers=args.multi_answers,
         cached_QAMetaData_path = args.cached_QAMetaData_path,
         raw_QAData_path = args.raw_QAData_path,
         force_data_prepro = args.force_data_prepro,
-        mode = args.mode
+        mode = args.mode,
     )
 
     # Testing Disabling Eager Execution for MINERVA's compatibility
@@ -46,14 +54,18 @@ if __name__ == "__main__":
     max_questions = batcher.get_question_num()
     counter = 0
     for data in next_batch_func():
-        questions, q_embeddings, source_ent, ans_ent = data
+        questions, q_embeddings, source_ent, ans_ent, paths = data
+        print(batcher.relation_vocab['NO_OP'])
+
         question_text = batcher.translate_questions(questions)
         ent_names = batcher.translate_entities(source_ent)
-        ans_ent_name = batcher.translate_entities(ans_ent)
+        ans_ent_name = batcher.translate_entities(ans_ent, dynamic_list=args.multi_answers)
+
+        break
 
         for i0 in range(source_ent.shape[0]):
             print(f"Batch Questions: {question_text[i0]}, Source Entity: {ent_names[i0]}, Answer Entity: {ans_ent_name[i0]}")
-        
+
         counter += len(questions)
 
         if counter >= max_questions:
