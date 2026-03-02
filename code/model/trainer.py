@@ -168,6 +168,7 @@ class TrainerNLQ(object):
         seed: int,
         entity_vocab: Dict[str, int],
         relation_vocab: Dict[str, int],
+        evaluate_paraphrases: bool = False,
         multi_answers: bool = False,
         use_full_graph: bool = False,
         use_directed_graph: bool = False,
@@ -225,6 +226,7 @@ class TrainerNLQ(object):
             seed: Random seed for reproducibility
             entity_vocab: Entity name to integer ID mapping for embedding lookup
             relation_vocab: Relation name to integer ID mapping for embedding lookup
+            evaluate_paraphrases: Whether to evaluate on paraphrased questions instead of original text
             multi_answers: Whether to handle questions with multiple correct answers
             use_full_graph: Whether to use the full knowledge graph (train + dev + test) or only the training subgraph
             use_directed_graph: Whether to treat the graph as directed (no inverse relations) or undirected (include inverse relations)
@@ -255,6 +257,7 @@ class TrainerNLQ(object):
         self.cached_QAMetaData_path = cached_QAMetaData_path
         self.raw_QAData_path = raw_QAData_path
         self.multi_answers = multi_answers
+        self.evaluate_paraphrases = evaluate_paraphrases
         self.max_num_actions = max_num_actions
         self.embedding_size = embedding_size
         self.hidden_size = hidden_size
@@ -303,6 +306,7 @@ class TrainerNLQ(object):
             question_format=question_format,
             cached_QAMetaData_path=cached_QAMetaData_path,
             raw_QAData_path=raw_QAData_path,
+            evaluate_paraphrases=evaluate_paraphrases,
             multi_answers=multi_answers,
             max_num_actions=max_num_actions,
             entity_vocab=entity_vocab, 
@@ -1982,6 +1986,7 @@ if __name__ == '__main__':
             question_format=options['question_format'],
             cached_QAMetaData_path=options['cached_QAMetaData_path'],
             raw_QAData_path=options['raw_QAData_path'],
+            evaluate_paraphrases=options['evaluate_paraphrases'],
             multi_answers=options['multi_answers'],
             max_num_actions=options['max_num_actions'],
             embedding_size=options['embedding_size'],
@@ -2053,6 +2058,7 @@ if __name__ == '__main__':
         question_format=options['question_format'],
         cached_QAMetaData_path=options['cached_QAMetaData_path'],
         raw_QAData_path=options['raw_QAData_path'],
+        evaluate_paraphrases=options['evaluate_paraphrases'],
         multi_answers=options['multi_answers'],
         max_num_actions=options['max_num_actions'],
         embedding_size=options['embedding_size'],

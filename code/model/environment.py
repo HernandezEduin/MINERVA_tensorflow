@@ -921,7 +921,8 @@ class EnvNLQ(object):
         max_num_actions: int,
         entity_vocab: Dict[str, int], 
         relation_vocab: Dict[str, int], 
-        mode: str = 'train', 
+        mode: str = 'train',
+        evaluate_paraphrases: bool = False,
         multi_answers: bool = False,
         use_full_graph: bool = False,
         use_directed_graph: bool = True,
@@ -954,6 +955,7 @@ class EnvNLQ(object):
             entity_vocab: Mapping from entity names to unique integer IDs
             relation_vocab: Mapping from relation names to unique integer IDs  
             mode: Operation mode - 'train' for training, 'dev'/'test' for evaluation
+            evaluate_paraphrases: Whether to evaluate on paraphrased questions instead of original text
             multi_answers: Whether to handle questions with multiple correct answers
             use_full_graph: Whether to use the full graph (including test/dev triples) or only training graph
             use_directed_graph: Whether to treat the graph as directed (no inverse relations) or undirected (include inverse relations)
@@ -978,6 +980,7 @@ class EnvNLQ(object):
         self.test_batch_size = test_batch_size
         self.test_rollouts = test_rollouts
         self.multi_answers = multi_answers
+        self.evaluate_paraphrases = evaluate_paraphrases
         input_dir = data_input_dir
 
         self.batcher = QuestionBatcher(
@@ -988,6 +991,7 @@ class EnvNLQ(object):
             cached_QAMetaData_path=cached_QAMetaData_path,
             question_format=question_format,
             multi_answers=multi_answers,
+            evaluate_paraphrases=evaluate_paraphrases,
             raw_QAData_path=raw_QAData_path,
             force_data_prepro=False,
             mode=self.mode,

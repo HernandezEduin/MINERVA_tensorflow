@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from transformers import AutoTokenizer
 
-from code.data.data_utils import load_dictionary, load_qa_data
+from code.data.data_utils import load_dictionary, load_qa_data, paraphrase2question
 from code.data.embedding_server import EmbeddingServer
 
 class QuestionBatcher:
@@ -52,6 +52,7 @@ class QuestionBatcher:
         cached_QAMetaData_path: str,
         raw_QAData_path: str,
         mode: str = "train",
+        evaluate_paraphrases: bool = False,
         multi_answers: bool = False,
         seed: Optional[int] = None,
         force_data_prepro: bool = False,
@@ -69,6 +70,7 @@ class QuestionBatcher:
             cached_QAMetaData_path: Path to cached preprocessed QA metadata JSON
             raw_QAData_path: Path to raw QA dataset CSV file
             mode: Initial mode ('train', 'dev', or 'test')
+            evaluate_paraphrases: Whether to evaluate on paraphrased questions instead of original text
             multi_answers: Whether to handle multiple answers per question
             seed: Optional seed for random number generation
             force_data_prepro: Whether to force reprocessing of cached data
@@ -94,6 +96,7 @@ class QuestionBatcher:
         self.test_df: pd.DataFrame
         self.train_metadata: Dict
         self.question_format: str = question_format
+        self.evaluate_paraphrases: bool = evaluate_paraphrases
         self.multi_answers: bool = multi_answers
         self.train_df, self.dev_df, self.test_df, self.train_metadata = load_qa_data(
             cached_metadata_path=cached_QAMetaData_path,
@@ -110,10 +113,18 @@ class QuestionBatcher:
         self.path_exists = True if self.train_metadata.get("paths_column") is not None else False
         if question_format == 'paraphrased' and self.train_metadata.get("question_paraphrased_column") is None:
             raise ValueError("Paraphrased questions are requested but not available in the dataset.")
+        if evaluate_paraphrases and self.train_metadata.get("question_paraphrased_column") is None:
+            raise ValueError("Paraphrased questions are requested but not available in the dataset.")
         if question_format == 'relation_only' and not(self.path_exists):
             raise ValueError("Relation-only format is requested but no path information is available in the dataset.")
         if self.multi_answers and not self.train_metadata.get("is_multi_answer"):
             raise ValueError("Multi-answer mode is requested but the dataset is not multi-answer.")
+
+
+        if evaluate_paraphrases:
+            # For evaluation with paraphrased questions, we will use the paraphrased questions as the main 'Question' column for consistency in batching and embedding generation.
+            self.dev_df = paraphrase2question(self.dev_df)
+            self.test_df = paraphrase2question(self.test_df)
 
         # Set initial mode and evaluation dataset
         self.mode: str = mode
@@ -318,12 +329,9 @@ class QuestionBatcher:
             ques_ids: List[int] = batch['Question-Number'].tolist()
 
             # Extract questions based on the specified format
-            if self.question_format == 'full_text':
+            if (self.question_format == 'full_text') or (self.question_format == 'paraphrased'):
+                # NOTE: For evaluate_paraphrases, each paraphrased questions are copied to the 'Question' column so each are evaluated independently.
                 questions: List[List[int]] = batch['Question'].tolist() # already tokenized
-            elif self.question_format == 'paraphrased':
-                # TODO: Improve paraphrase selection strategy for evaluation (currently uses the first paraphrase)
-                questions: List[List[int]] = batch['Question-Paraphrased'] # pandas dataframe where each entry is a list of list of token ids, randomly select one paraphrase for each question
-                questions = [q[0] if isinstance(q, list) and len(q) > 0 else [] for q in questions] # for evaluation, use the first paraphrase if available
             elif self.question_format == 'relation_only':
                 # extract relation sequences
                 relations_only: List[str] = []

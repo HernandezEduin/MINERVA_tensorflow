@@ -18,6 +18,8 @@ def get_args() -> argparse.Namespace:
 
     # QA Dataset
     ap.add_argument('--question_format', type=str, default="full_text", choices=['full_text', 'paraphrased', 'relation_only', 'graph_only'], help="Format of the question input")
+    ap.add_argument("--evaluate_paraphrases", action='store_true',
+                        help="Whether to evaluate on paraphrased questions instead of original text.")
     ap.add_argument('--multi-answers', action='store_true', help="Whether to handle multiple answers per question")
     ap.add_argument('--raw_QAData_path', type=str, default="./datasets/nlq/mquake_v2/mquake_v2_cf9k_qa_nhop.csv", help="Path to the raw QA CSV dataset (default: FreebaseQA)")
     ap.add_argument('--cached_QAMetaData_path', type=str, default="./.cache/itl/mquake_v2_cf9k_qa_nhop.json", help="Path to cached tokenized QA metadata JSON file")
@@ -42,6 +44,7 @@ if __name__ == "__main__":
         question_tokenizer_name = args.question_tokenizer_name,
         question_format=args.question_format,
         multi_answers=args.multi_answers,
+        evaluate_paraphrases=args.evaluate_paraphrases,
         cached_QAMetaData_path = args.cached_QAMetaData_path,
         raw_QAData_path = args.raw_QAData_path,
         force_data_prepro = args.force_data_prepro,

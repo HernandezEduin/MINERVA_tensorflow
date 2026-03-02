@@ -105,6 +105,38 @@ def extract_literals(column: Union[str, pd.Series], flatten: bool = False) -> Un
         
     return evaluated_column
 
+def paraphrase2question(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expand paraphrased questions into individual rows.
+
+    For each row:
+    - each paraphrase becomes its own row
+    - all other columns are copied
+    - 'Question' is replaced by the paraphrased question
+    """
+
+    paraphrase_col = "Question-Paraphrased"
+
+    if paraphrase_col not in df.columns:
+        raise ValueError(
+            f"DataFrame does not contain the expected paraphrase column "
+            f"'{paraphrase_col}'"
+        )
+
+    df_out = df.copy()
+
+    # Replace empty / invalid paraphrase lists with [original question]
+    mask = ~df_out[paraphrase_col].apply(lambda x: isinstance(x, list) and len(x) > 0)
+    df_out.loc[mask, paraphrase_col] = df_out.loc[mask, "Question"].apply(lambda x: [x])
+
+    # Expand rows
+    df_out = df_out.explode(paraphrase_col, ignore_index=True)
+
+    # Replace Question with paraphrase
+    df_out["Question"] = df_out[paraphrase_col]
+
+    return df_out
+
 def process_and_cache_triviaqa_data(
     raw_QAData_path: str,
     cached_toked_qatriples_metadata_path: str,
