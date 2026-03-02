@@ -145,6 +145,8 @@ def read_options() -> Dict[str, Any]:
                         help="Whether to print the reasoning paths taken by the agent. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
     parser.add_argument("--print_predictions", default='False', type=str2bool,
                         help="Whether to print the final predicted answers by the agent. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
+    parser.add_argument("--export_representation_parameters", default='False', type=str2bool,
+                        help="Whether to export the learned entity embeddings, relation embeddings, and question projection weights after evaluation. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
 
     # Model Loading and Saving
     parser.add_argument("--model_dir", default="", type=str,

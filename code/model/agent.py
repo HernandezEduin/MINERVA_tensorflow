@@ -550,6 +550,126 @@ class AgentNLQ(object):
 
             return output
 
+    def export_embeddings(
+        self,
+        session: tf.compat.v1.Session
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Export the learned entity and relation embedding lookup tables.
+
+        Args:
+            session: Active TensorFlow session.
+
+        Returns:
+            Tuple containing:
+                - entity_embeddings: [num_entities, 2 * entity_embedding_size]
+                - relation_embeddings: [num_relations, 2 * embedding_size]
+        """
+        with session.graph.as_default():
+            entity_embeddings, relation_embeddings = session.run([
+                self.entity_lookup_table,
+                self.relation_lookup_table
+            ])
+        return entity_embeddings, relation_embeddings
+    
+    def export_projection_weights(
+        self,
+        session: tf.compat.v1.Session
+    ) -> Optional[Dict[str, Tuple[np.ndarray, np.ndarray]]]:
+        """
+        Export the learned question projection weights.
+
+        Returns:
+            A dictionary mapping layer names to (kernel, bias) tuples.
+            Returns None if no matching projection variables are found.
+
+            Examples:
+                linear:
+                    {
+                        "dense": (kernel, bias)
+                    }
+
+                mlp:
+                    {
+                        "mlp_fc1": (kernel, bias),
+                        "mlp_fc2": (kernel, bias),
+                        ...
+                    }
+
+                residual:
+                    {
+                        "down": (kernel, bias),
+                        "res_fc1": (kernel, bias),
+                        ...
+                    }
+        """
+        with session.graph.as_default():
+            if self.projection_adapter == "linear":
+                scope = "question_projection/question_dense/dense"
+                expected_layers = ["dense"]
+
+            elif self.projection_adapter == "mlp":
+                scope = "question_projection/question_mlp"
+                expected_layers = [f"mlp_fc{i+1}" for i in range(self.projection_layers)]
+
+            elif self.projection_adapter == "residual":
+                scope = "question_projection/question_residual_adapter"
+                expected_layers = ["down"] + [f"res_fc{i+1}" for i in range(self.projection_layers)]
+
+            else:
+                return None
+
+            vars_in_scope = tf.compat.v1.global_variables(scope=scope)
+            if not vars_in_scope:
+                return None
+
+            var_dict = {v.name: v for v in vars_in_scope}
+            exported = {}
+
+            for layer_name in expected_layers:
+                kernel_var = None
+                bias_var = None
+
+                for var_name, var in var_dict.items():
+                    if f"/{layer_name}/kernel:" in var_name:
+                        kernel_var = var
+                    elif f"/{layer_name}/bias:" in var_name:
+                        bias_var = var
+
+                if kernel_var is not None and bias_var is not None:
+                    kernel, bias = session.run([kernel_var, bias_var])
+                    exported[layer_name] = (kernel, bias)
+
+            return exported if exported else None
+
+    def export_representation_parameters(
+        self,
+        session: tf.compat.v1.Session,
+        output_path: str
+    ) -> None:
+        """
+        Export entity embeddings, relation embeddings, and question projection weights
+        into a single .npz file.
+
+        Args:
+            session: Active TensorFlow session.
+            output_path: Output .npz path.
+        """
+        entity_embeddings, relation_embeddings = self.export_embeddings(session)
+        projection_weights = self.export_projection_weights(session)
+
+        save_dict = {
+            "entity_embeddings": entity_embeddings,
+            "relation_embeddings": relation_embeddings,
+        }
+
+        if projection_weights is not None:
+            for layer_name, (kernel, bias) in projection_weights.items():
+                save_dict[f"{layer_name}_kernel"] = kernel
+                save_dict[f"{layer_name}_bias"] = bias
+
+        np.savez(output_path, **save_dict)
+
     def __call__(
         self, 
         candidate_relation_sequence: List[tf.Tensor], 

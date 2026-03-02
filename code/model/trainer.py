@@ -1930,6 +1930,9 @@ class TrainerNLQ(object):
 
         gc.collect()
 
+    def export_representation_parameters(self, sess: tf.compat.v1.Session, output_path: str):
+        self.agent.export_representation_parameters(sess, output_path)
+
     def __enter__(self):
         return self
 
@@ -2116,6 +2119,11 @@ if __name__ == '__main__':
             set_seeds(options['seed']) # Ensure reproducibility for predictions
             trainer.path_logger_file_ = os.path.join(path_logger_file, "test_beam", "predict_paths")
             trainer.predict(sess, beam=options['use_beam'], mode='test')
+        
+        if options['export_representation_parameters']:
+            export_path = os.path.join(output_dir, "representation_parameters")
+            os.makedirs(export_path, exist_ok=True)
+            trainer.export_representation_parameters(sess, os.path.join(export_path, "learned_parameters"))
     
     logging.info(f"Evaluation completed. Closing Server")
     embedding_server.close()  # Close the embedding server connection
