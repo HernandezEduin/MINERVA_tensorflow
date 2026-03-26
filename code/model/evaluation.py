@@ -93,6 +93,7 @@ if __name__ == '__main__':
         question_format=options['question_format'],
         cached_QAMetaData_path=options['cached_QAMetaData_path'],
         raw_QAData_path=options['raw_QAData_path'],
+        force_data_prepro=False,
         evaluate_paraphrases=options['evaluate_paraphrases'],
         multi_answers=options['multi_answers'],
         max_num_actions=options['max_num_actions'],

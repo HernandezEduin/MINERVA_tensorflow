@@ -918,6 +918,7 @@ class EnvNLQ(object):
         question_format: str,
         cached_QAMetaData_path: str,
         raw_QAData_path: str,
+        force_data_prepro: bool,
         max_num_actions: int,
         entity_vocab: Dict[str, int], 
         relation_vocab: Dict[str, int], 
@@ -951,6 +952,7 @@ class EnvNLQ(object):
             question_format: Format of the question input ('full_text', 'relation_only', 'graph_only')
             cached_QAMetaData_path: Path to cached question-answer metadata
             raw_QAData_path: Path to raw question-answer data files
+            force_data_prepro: Whether to force data preprocessing
             max_num_actions: Maximum number of actions/relations per entity
             entity_vocab: Mapping from entity names to unique integer IDs
             relation_vocab: Mapping from relation names to unique integer IDs  
@@ -993,7 +995,7 @@ class EnvNLQ(object):
             multi_answers=multi_answers,
             evaluate_paraphrases=evaluate_paraphrases,
             raw_QAData_path=raw_QAData_path,
-            force_data_prepro=False,
+            force_data_prepro=force_data_prepro,
             mode=self.mode,
             seed=seed,
             embedding_server=embedding_server,
