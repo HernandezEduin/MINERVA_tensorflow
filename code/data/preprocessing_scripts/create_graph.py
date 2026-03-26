@@ -10,7 +10,7 @@ def parse_args(args=None):
                         help="Name of the dataset to create the graph for")
     parser.add_argument("--root_dir", type=str, default="../../../",
                         help="Root directory for the dataset")
-    parser.add_argument("--data_dir", type=str, default="datasets/data_preprocessed/",
+    parser.add_argument("--data_dir", type=str, default="datasets/nlq/",
                         help="Directory where the dataset is located")
     parser.add_argument("-f", "--full_graph", action="store_true",
                         help="If set, will create a full graph with all triplets, otherwise will create a graph with only training triplets")
@@ -28,13 +28,20 @@ if __name__ == '__main__':
 
     print(f"Creating graph for dataset {args.dataset} in directory {dir}")
 
-    graphs = ['train.txt', 'dev.txt', 'test.txt'] if args.full_graph else ['train.txt']
+    if args.full_graph:
+        # check if triplets files exist
+        if os.path.exists(os.path.join(dir, 'triplets.txt')):
+            graphs = ['triplets.txt']
+        else:
+            graphs = ['train.txt', 'dev.txt', 'test.txt']
+    else:
+        graphs = ['train.txt']
 
     triplets = []
     for f in graphs:
         with open(os.path.join(dir, f)) as raw_file:
             for line in raw_file:
-                e1, r, e2 = re.split(r'\s+', line.strip())
+                e1, r, e2 = re.split(r'\t+', line.strip())
                 triplets.append((e1, r, e2))
                 triplets.append((e2, '_' + r, e1))  # add reverse triplet
 
@@ -42,7 +49,7 @@ if __name__ == '__main__':
         priority_triplets = set()
         with open(os.path.join(dir, 'priority.txt')) as raw_file:
             for line in raw_file:
-                e1, r, e2 = re.split(r'\s+', line.strip())
+                e1, r, e2 = re.split(r'\t+', line.strip())
                 priority_triplets.add((e1, r, e2))
                 priority_triplets.add((e2, '_' + r, e1))
         triplets = [t for t in triplets if t not in priority_triplets]

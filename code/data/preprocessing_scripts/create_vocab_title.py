@@ -45,7 +45,7 @@ def parse_args(args=None):
                         help="Name of the dataset to create the graph for")
     parser.add_argument("--root_dir", type=str, default="../../../",
                         help="Root directory for the dataset")
-    parser.add_argument("--data_dir", type=str, default="datasets/data_preprocessed/",
+    parser.add_argument("--data_dir", type=str, default="datasets/nlq/",
                         help="Directory where the dataset is located")
     parser.add_argument("--node_data_key", type=str, default="QID",
                         help="Key to use for node data")
@@ -86,6 +86,8 @@ if __name__ == '__main__':
 
     with open(os.path.join(vocab_dir, 'entity_title.json'), 'w') as fout:
         json.dump(entity2title, fout, indent=4)
+    print(f"Saved entity title mapping for {len(entity2title)} entities to {os.path.join(vocab_dir, 'entity_title.json')}")
 
     with open(os.path.join(vocab_dir, 'relation_title.json'), 'w') as fout:
         json.dump(relation2title, fout, indent=4)
+    print(f"Saved relation title mapping for {len(relation2title)} relations to {os.path.join(vocab_dir, 'relation_title.json')}")

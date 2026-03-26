@@ -6,12 +6,12 @@ import os
 import re
 
 def parse_args(args=None):
-    parser = argparse.ArgumentParser(description="Create a graph for the dataset")
+    parser = argparse.ArgumentParser(description="Create a vocab for the dataset")
     parser.add_argument("--dataset", type=str, default="kinshiphinton",
-                        help="Name of the dataset to create the graph for")
+                        help="Name of the dataset to create the vocab for")
     parser.add_argument("--root_dir", type=str, default="../../../",
                         help="Root directory for the dataset")
-    parser.add_argument("--data_dir", type=str, default="datasets/data_preprocessed/",
+    parser.add_argument("--data_dir", type=str, default="datasets/nlq/",
                         help="Directory where the dataset is located")
     return parser.parse_args(args)
 
@@ -27,9 +27,10 @@ if __name__ == '__main__':
     os.makedirs(vocab_dir, exist_ok=True)
 
     # check if full_graph is present
-    files = ['train.txt', 'dev.txt', 'test.txt', 'graph.txt']
     if os.path.exists(os.path.join(dir, 'full_graph.txt')):
-        files.append('full_graph.txt')
+        files = ['full_graph.txt']
+    else:
+        files = ['train.txt', 'dev.txt', 'test.txt', 'graph.txt']
 
     entity_vocab = {}
     relation_vocab = {}
@@ -49,7 +50,7 @@ if __name__ == '__main__':
     for f in files:
         with open(os.path.join(dir, f)) as raw_file:
             for line in raw_file:
-                e1, r, e2 = re.split(r'\s+', line.strip())
+                e1, r, e2 = re.split(r'\t+', line.strip())
                 if e1 not in entity_vocab:
                     entity_vocab[e1] = entity_counter
                     entity_counter += 1
