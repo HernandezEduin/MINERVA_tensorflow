@@ -7,8 +7,17 @@ dependencies:
   - cudnn=8.1.0
   - pip
   - pip:
-      - networkx==2.8.8
       - numpy==1.23.5
-      - tensorflow==2.11.1
       - scipy==1.10.1
+      - tensorflow==2.11.1
       - tqdm==4.64.1
+      - transformers==4.35.2
+      - tokenizers<0.15
+      - safetensors==0.3.3
+      - huggingface-hub==0.17.3
+      - pandas==2.3.1
+      - scikit-learn==1.6.1
+      - fastparquet==2024.11.0
+      - omegaconf==2.3.0
+      - wandb>=0.15.0
+      - matplotlib>=3.9.4

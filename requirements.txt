@@ -1,49 +1,26 @@
-# Requirements for Natural Language Question (NLQ) functionality
-# This extends the base MINERVA requirements with NLP capabilities
+# MINERVA (NLQ) requirements for Python 3.9.x (conda env: minerva)
+# Aligned with current imports under code/ and runtime parquet usage.
 
-# === Base MINERVA Requirements ===
-
-# code/data/preprocessing_scripts/create_graph.py: 1
-networkx == 2.8.8
-
-# code/data/feed_data.py: 3
-# code/data/grapher.py: 3
-# code/data/preprocessing_scripts/create_inverse.py: 3
-# code/data/preprocessing_scripts/preprocess.py: 3
-# code/data/preprocessing_scripts/preprocess_countries.py: 3
+# Core numerics and training
 numpy == 1.23.5
-
-# CPU version of TensorFlow (compatible with most systems)
+scipy == 1.10.1
 tensorflow == 2.11.1
-
-# code/model/trainer.py: 20 (for logsumexp)
-scipy == 1.10.1 
-
-# code/data/feed_data.py: 1
-# code/model/trainer.py: 3
 tqdm == 4.64.1
 
-# === NLQ-Specific Requirements ===
-
-# Natural Language Processing and Question Understanding
-# code/model/: Transformer models for question encoding
+# NLP / tokenizer stack used by QuestionBatcher and EmbeddingServer
 transformers == 4.35.2
 tokenizers < 0.15
 safetensors == 0.3.3
-
-# Question embedding generation and BERT integration
-# code/data/embedding_server.py: Hugging Face model hub integration
 huggingface-hub == 0.17.3
 
-# Data processing and CSV handling for question datasets
-# code/data/feed_data.py: Question batching and preprocessing
+# Data loading, splitting, and cache format (.parquet)
 pandas == 2.3.1
+scikit-learn == 1.6.1
 fastparquet == 2024.11.0
 
-# Machine learning utilities for NLQ evaluation
-# Enhanced evaluation metrics and model analysis
-scikit-learn == 1.6.1
-
-# Configuration management for experiment tracking and reproducibility
+# Config and experiment tracking
 omegaconf == 2.3.0
 wandb >= 0.15.0
+
+# Plotting and visualization (optional, for analysis)
+matplotlib >= 3.9.4
