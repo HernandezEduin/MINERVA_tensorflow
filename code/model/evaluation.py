@@ -121,6 +121,7 @@ if __name__ == '__main__':
         seed=options['seed'],
         entity_vocab=entity_vocab, 
         relation_vocab=relation_vocab,
+        use_weighted_hop_sampling=options['use_weighted_hop_sampling'],
         use_full_graph=options['use_full_graph'], 
         use_directed_graph=options['use_directed_graph'], 
         use_stop_signal=options['use_stop_signal'],

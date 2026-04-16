@@ -171,6 +171,7 @@ class TrainerNLQ(object):
         relation_vocab: Dict[str, int],
         evaluate_paraphrases: bool = False,
         multi_answers: bool = False,
+        use_weighted_hop_sampling: bool = False,
         use_full_graph: bool = False,
         use_directed_graph: bool = False,
         use_stop_signal: bool = False,
@@ -229,6 +230,7 @@ class TrainerNLQ(object):
             relation_vocab: Relation name to integer ID mapping for embedding lookup
             evaluate_paraphrases: Whether to evaluate on paraphrased questions instead of original text
             multi_answers: Whether to handle questions with multiple correct answers
+            use_weighted_hop_sampling: Whether to use weighted hop-based sampling for training batches
             use_full_graph: Whether to use the full knowledge graph (train + dev + test) or only the training subgraph
             use_directed_graph: Whether to treat the graph as directed (no inverse relations) or undirected (include inverse relations)
             use_stop_signal: Whether to include a STOP action in the action space
@@ -283,6 +285,7 @@ class TrainerNLQ(object):
         self.use_beam = use_beam
         self.seed = seed
         self.use_wandb = use_wandb
+        self.use_weighted_hop_sampling = use_weighted_hop_sampling
         self.use_stop_signal = use_stop_signal
         self.use_restart_signal = use_restart_signal
         self.stop_signal_reward = stop_signal_reward
@@ -314,6 +317,7 @@ class TrainerNLQ(object):
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab, 
             mode='train',
+            use_weighted_hop_sampling=use_weighted_hop_sampling,
             use_full_graph=use_full_graph,
             use_directed_graph=use_directed_graph,
             use_stop_signal=use_stop_signal,
@@ -2019,6 +2023,7 @@ if __name__ == '__main__':
             seed=options['seed'],
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab,
+            use_weighted_hop_sampling=options['use_weighted_hop_sampling'],
             use_full_graph=options['use_full_graph'],
             use_directed_graph=options['use_directed_graph'],
             use_stop_signal=options['use_stop_signal'],
@@ -2092,6 +2097,7 @@ if __name__ == '__main__':
         seed=options['seed'],
         entity_vocab=entity_vocab, 
         relation_vocab=relation_vocab,
+        use_weighted_hop_sampling=options['use_weighted_hop_sampling'],
         use_full_graph=options['use_full_graph'], 
         use_directed_graph=options['use_directed_graph'], 
         use_stop_signal=options['use_stop_signal'],

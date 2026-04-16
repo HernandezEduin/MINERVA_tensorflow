@@ -52,6 +52,7 @@ class QuestionBatcher:
         cached_QAMetaData_path: str,
         raw_QAData_path: str,
         mode: str = "train",
+        use_weighted_hop_sampling: bool = False,
         evaluate_paraphrases: bool = False,
         multi_answers: bool = False,
         seed: Optional[int] = None,
@@ -70,6 +71,7 @@ class QuestionBatcher:
             cached_QAMetaData_path: Path to cached preprocessed QA metadata JSON
             raw_QAData_path: Path to raw QA dataset CSV file
             mode: Initial mode ('train', 'dev', or 'test')
+            use_weighted_hop_sampling: Whether to use weighted hop-based sampling for training batches
             evaluate_paraphrases: Whether to evaluate on paraphrased questions instead of original text
             multi_answers: Whether to handle multiple answers per question
             seed: Optional seed for random number generation
@@ -143,6 +145,40 @@ class QuestionBatcher:
         # Cache embedding dimensions for easy access
         self._embedding_dim: Optional[int] = None
         self.calculate_embedding_dimensions()  # Pre-fetch dimensions
+
+        # Precompute training sampling probabilities from the Hops column
+        self.use_weighted_hop_sampling: bool = use_weighted_hop_sampling
+        self.train_sampling_probs: Optional[np.ndarray] = self._build_train_sampling_probs() if self.use_weighted_hop_sampling else None
+
+    def _build_train_sampling_probs(self) -> Optional[np.ndarray]:
+        """
+        Build per-row sampling probabilities for the training set using the Hops column.
+
+        Strategy:
+            inverse-frequency weighting by hop class, so each hop count contributes
+            roughly equally in expectation.
+
+        Returns:
+            np.ndarray of shape [len(train_df)] summing to 1, or None if Hops is missing.
+        """
+        if "Hops" not in self.train_df.columns:
+            return None
+
+        hops = pd.to_numeric(self.train_df["Hops"], errors="coerce")
+        if hops.isna().any():
+            bad_rows = hops[hops.isna()].index.tolist()[:10]
+            raise ValueError(
+                f"Found non-numeric or missing values in train_df['Hops'] at rows like: {bad_rows}"
+            )
+
+        hop_counts = hops.value_counts()
+        row_weights = hops.map(lambda h: 1.0 / hop_counts.loc[h]).to_numpy(dtype=np.float64)
+
+        total = row_weights.sum()
+        if total <= 0:
+            raise ValueError("Training sampling weights sum to zero.")
+
+        return row_weights / total
 
     def calculate_embedding_dimensions(self) -> Tuple[int, int]:
         """
@@ -250,8 +286,13 @@ class QuestionBatcher:
         """
         assert self.mode == 'train', "Batcher is not in training mode"
         while True:
-            # Randomly sample batch indices
-            batch_idx = np.random.randint(0, len(self.eval_df), size=self.batch_size)
+            if self.train_sampling_probs is not None:
+                # Weighted sampling by Hops for training
+                batch_idx = np.random.choice(len(self.eval_df), size=self.batch_size, replace=True, p=self.train_sampling_probs)
+            else:
+                # Uniformly sample batch indices
+                batch_idx = np.random.randint(0, len(self.eval_df), size=self.batch_size)
+            
             batch = self.eval_df.iloc[batch_idx]
             
             source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)

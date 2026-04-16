@@ -65,7 +65,9 @@ def read_options() -> Dict[str, Any]:
                          help="Force re-processing of QA data, even if cache exists")
     parser.add_argument("--multi_answers", type=str2bool, default='False',
                          help="Whether to handle multiple answers per question. Accepts: yes/true/t/y/1 (True) or no/false/f/n/0 (False)")
-    
+    parser.add_argument('--use_weighted_hop_sampling', type=str2bool, default='False',
+                         help="Whether to use weighted hop-based sampling for training batches")
+
     # Textual Embedding (LLMs)
     parser.add_argument("--question_tokenizer_name", type=str, default="bert-base-uncased",
                          help="Tokenizer name for question embeddings. Only required for NLQ Task.")

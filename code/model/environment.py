@@ -925,6 +925,7 @@ class EnvNLQ(object):
         mode: str = 'train',
         evaluate_paraphrases: bool = False,
         multi_answers: bool = False,
+        use_weighted_hop_sampling: bool = False,
         use_full_graph: bool = False,
         use_directed_graph: bool = True,
         use_stop_signal: bool = False,
@@ -959,6 +960,7 @@ class EnvNLQ(object):
             mode: Operation mode - 'train' for training, 'dev'/'test' for evaluation
             evaluate_paraphrases: Whether to evaluate on paraphrased questions instead of original text
             multi_answers: Whether to handle questions with multiple correct answers
+            use_weighted_hop_sampling: Whether to use weighted sampling of hops during training
             use_full_graph: Whether to use the full graph (including test/dev triples) or only training graph
             use_directed_graph: Whether to treat the graph as directed (no inverse relations) or undirected (include inverse relations)
             use_stop_signal: Whether to include a STOP action in the action space
@@ -983,6 +985,7 @@ class EnvNLQ(object):
         self.test_rollouts = test_rollouts
         self.multi_answers = multi_answers
         self.evaluate_paraphrases = evaluate_paraphrases
+        self.use_weighted_hop_sampling = use_weighted_hop_sampling
         input_dir = data_input_dir
 
         self.batcher = QuestionBatcher(
@@ -993,6 +996,7 @@ class EnvNLQ(object):
             cached_QAMetaData_path=cached_QAMetaData_path,
             question_format=question_format,
             multi_answers=multi_answers,
+            use_weighted_hop_sampling=use_weighted_hop_sampling,
             evaluate_paraphrases=evaluate_paraphrases,
             raw_QAData_path=raw_QAData_path,
             force_data_prepro=force_data_prepro,
