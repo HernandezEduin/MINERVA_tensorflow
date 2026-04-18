@@ -14,16 +14,18 @@ def get_args() -> argparse.Namespace:
     ap.add_argument('--mode', type=str, default='train', choices=['train', 'dev', 'test'], help='Mode for the batcher (default: train)')
 
     # KG Dataset
-    ap.add_argument('--data_dir', type=str, default="./datasets/nlq/mquake_v2", help='Root directory for KG triples and metadata (default: ./data/FB15k)')
+    ap.add_argument('--data_dir', type=str, default="./datasets/nlq/kinshiphinton_v2", help='Root directory for KG triples and metadata (default: ./data/FB15k)')
 
     # QA Dataset
     ap.add_argument('--question_format', type=str, default="full_text", choices=['full_text', 'paraphrased', 'relation_only', 'graph_only'], help="Format of the question input")
     ap.add_argument("--evaluate_paraphrases", action='store_true',
                         help="Whether to evaluate on paraphrased questions instead of original text.")
-    ap.add_argument('--multi-answers', action='store_true', help="Whether to handle multiple answers per question")
-    ap.add_argument('--raw_QAData_path', type=str, default="./datasets/nlq/mquake_v2/mquake_v2_cf9k_qa_nhop.csv", help="Path to the raw QA CSV dataset (default: FreebaseQA)")
-    ap.add_argument('--cached_QAMetaData_path', type=str, default="./.cache/itl/mquake_v2_cf9k_qa_nhop.json", help="Path to cached tokenized QA metadata JSON file")
+    # ap.add_argument('--raw_QAData_path', type=str, default="./datasets/nlq/mquake_st/mquake_sa_qa_nhop.csv", help="Path to the raw QA CSV dataset (default: FreebaseQA)")
+    # ap.add_argument('--cached_QAMetaData_path', type=str, default="./.cache/itl/mquake_sa_qa_nhop.json", help="Path to cached tokenized QA metadata JSON file")
+    ap.add_argument('--raw_QAData_path', type=str, default="./datasets/nlq/kinshiphinton_v2/kinship_qa_nhop.csv", help="Path to the raw QA CSV dataset (default: FreebaseQA)")
+    ap.add_argument('--cached_QAMetaData_path', type=str, default="./.cache/itl/kinship_qa_nhop.json", help="Path to cached tokenized QA metadata JSON file")
     ap.add_argument('--force_data_prepro', '-f', action="store_true", help="Force re-processing of QA data, even if cache exists")
+    ap.add_argument('--use_weighted_hop_sampling', action='store_true', help="Whether to use weighted hop-based sampling for training batches")
 
     'Textual Embedding (LLMs)'
     ap.add_argument("--question_tokenizer_name", type=str, default="bert-base-uncased", help="Tokenizer name for question embeddings")
@@ -43,7 +45,7 @@ if __name__ == "__main__":
         test_batch_size=args.batch_size,
         question_tokenizer_name = args.question_tokenizer_name,
         question_format=args.question_format,
-        multi_answers=args.multi_answers,
+        use_weighted_hop_sampling = args.use_weighted_hop_sampling,
         evaluate_paraphrases=args.evaluate_paraphrases,
         cached_QAMetaData_path = args.cached_QAMetaData_path,
         raw_QAData_path = args.raw_QAData_path,
@@ -56,17 +58,26 @@ if __name__ == "__main__":
 
     next_batch_func = batcher.yield_next_batch_train if args.mode == 'train' else batcher.yield_next_batch_test
     max_questions = batcher.get_question_num()
+    is_multi_answer = batcher.has_multi_answers()
+    has_paths = batcher.has_paths()
+    has_path_keys = batcher.has_path_keys()
+
     counter = 0
     for data in next_batch_func():
-        questions, q_embeddings, source_ent, ans_ent, paths, ques_ids = data
-        print(batcher.relation_vocab['NO_OP'])
+        questions, q_embeddings, source_ent, ans_ent, paths, path_keys, ques_ids = data
 
         question_text = batcher.translate_questions(questions)
         ent_names = batcher.translate_entities(source_ent)
-        ans_ent_name = batcher.translate_entities(ans_ent, dynamic_list=args.multi_answers)
+        ans_ent_name = batcher.translate_entities(ans_ent, dynamic_list=is_multi_answer)
 
         for i0 in range(source_ent.shape[0]):
-            print(f"Batch Questions (ID {ques_ids[i0]}): {question_text[i0]}, Source Entity: {ent_names[i0]}, Answer Entity: {ans_ent_name[i0]}")
+            hop_info = ""
+            if has_paths:
+                hop_info = f" ({len(paths[i0])}-hop)"
+            elif has_path_keys:
+                hop_info = f" ({len(path_keys[i0])}-hop)"
+
+            print(f"Batch Questions (ID {ques_ids[i0]}){hop_info}: {question_text[i0]}, Source Entity: {ent_names[i0]}, Answer Entity: {ans_ent_name[i0]}")
 
         break
 

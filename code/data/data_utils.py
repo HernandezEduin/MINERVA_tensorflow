@@ -143,7 +143,6 @@ def process_and_cache_triviaqa_data(
     question_tokenizer: PreTrainedTokenizer,
     entity2id: Dict[str, int],
     relation2id: Dict[str, int],
-    multi_answers: bool = False,
     seed: Optional[int] = None,
     override_split: bool = True,
     logger: Optional[logging.Logger] = None,
@@ -169,7 +168,6 @@ def process_and_cache_triviaqa_data(
         question_tokenizer: HuggingFace tokenizer for question text processing
         entity2id: Mapping from entity names to integer IDs
         relation2id: Mapping from relation names to integer IDs
-        multi_answers: Whether to handle multiple answers per question
         seed: Optional seed for random number generation
         override_split: If True, use SplitLabel column for splitting when available
         logger: Optional logger for progress tracking and warnings
@@ -198,15 +196,17 @@ def process_and_cache_triviaqa_data(
     assert len(csv_df.columns) > 2, \
         "CSV file must have at least 3 columns (Question, Source-Entity, Answer-Entity)"
     
+    is_multi_answer = bool(csv_df["Answer-Entity"].apply(lambda x: x.startswith('[') and x.endswith(']')).all())
+
     # Extract required columns
     question_number = csv_df["Question-Number"]
     questions = csv_df["Question"]
     source_ent = csv_df["Source-Entity"] 
-    answer_ent = csv_df["Answer-Entity"] if not multi_answers else extract_literals(
+    answer_ent = csv_df["Answer-Entity"] if not is_multi_answer else extract_literals(
         csv_df["Answer-Entity"], flatten=False
     )
     source_label = csv_df["Source"]
-    answer_label = csv_df["Answer"] if not multi_answers else extract_literals(
+    answer_label = csv_df["Answer"] if not is_multi_answer else extract_literals(
         csv_df["Answer"], flatten=False
     )
     
@@ -215,6 +215,7 @@ def process_and_cache_triviaqa_data(
     questions_disambiguated = csv_df["Question-Disambiguated"] if 'Question-Disambiguated' in csv_df.columns else None
     paths = extract_literals(csv_df["Paths"]) if 'Paths' in csv_df.columns else None
     paths_label = csv_df["Paths-Label"] if 'Paths-Label' in csv_df.columns else None
+    path_keys = csv_df["Path-Key"] if 'Path-Key' in csv_df.columns else None
     split_label = csv_df["SplitLabel"] if 'SplitLabel' in csv_df.columns else None
     hops = csv_df["Hops"] if 'Hops' in csv_df.columns else None
 
@@ -239,7 +240,7 @@ def process_and_cache_triviaqa_data(
 
     # Map entities and relations to integer IDs
     mapped_source_ent = source_ent.map(lambda ent: entity2id[ent])
-    mapped_answer_ent = answer_ent.map(lambda ent: entity2id[ent]) if not multi_answers else answer_ent.map(
+    mapped_answer_ent = answer_ent.map(lambda ent: entity2id[ent]) if not is_multi_answer else answer_ent.map(
         lambda ans_list: [entity2id[ans] for ans in ans_list]
     )
     if paths is not None:
@@ -248,6 +249,10 @@ def process_and_cache_triviaqa_data(
                 [entity2id[head], relation2id[rel], entity2id[tail]] 
                 for head, rel, tail in path
             ]
+        )
+    if path_keys is not None:
+        mapped_path_keys = path_keys.map(
+            lambda keys: [relation2id[rel] for rel in keys.split("->")]
         )
 
     # Generate unique timestamp for file naming
@@ -279,6 +284,8 @@ def process_and_cache_triviaqa_data(
         data_columns.append(mapped_paths)
     if paths_label is not None:
         data_columns.append(paths_label)
+    if path_keys is not None:
+        data_columns.append(mapped_path_keys)
     if hops is not None:
         data_columns.append(hops)
     if split_label is not None:
@@ -340,10 +347,10 @@ def process_and_cache_triviaqa_data(
         "answer_entity_column": "Answer-Entity",
         "paths_column": "Paths" if paths is not None else None,
         "paths_label_column": "Paths-Label" if paths_label is not None else None,
+        "path_keys_column": "Path-Key" if path_keys is not None else None,
         "hops_column": "Hops" if hops is not None else None,
         "splitLabel_column": "SplitLabel" if split_label is not None else None,
-        "is_multi_answer": multi_answers,
-        # "zero_indexed_columns": True,
+        "is_multi_answer": is_multi_answer,
         "date_processed": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "saved_paths": cached_split_locations,
         "timestamp": timestamp,
@@ -362,7 +369,6 @@ def load_qa_data(
     question_tokenizer_name: str,
     entity2id: Dict[str, int],
     relation2id: Dict[str, int],
-    multi_answers: bool = False,
     seed: Optional[int] = None,
     logger: Optional[logging.Logger] = None,
     force_recompute: bool = False,
@@ -435,7 +441,6 @@ def load_qa_data(
             question_tokenizer,
             entity2id,
             relation2id,
-            multi_answers=multi_answers,
             seed=seed,
             override_split=override_split,
             logger=logger,

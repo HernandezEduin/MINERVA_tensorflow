@@ -95,7 +95,6 @@ if __name__ == '__main__':
         raw_QAData_path=options['raw_QAData_path'],
         force_data_prepro=False,
         evaluate_paraphrases=options['evaluate_paraphrases'],
-        multi_answers=options['multi_answers'],
         max_num_actions=options['max_num_actions'],
         embedding_size=options['embedding_size'],
         hidden_size=options['hidden_size'],

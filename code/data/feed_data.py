@@ -54,7 +54,6 @@ class QuestionBatcher:
         mode: str = "train",
         use_weighted_hop_sampling: bool = False,
         evaluate_paraphrases: bool = False,
-        multi_answers: bool = False,
         seed: Optional[int] = None,
         force_data_prepro: bool = False,
         embedding_server: Optional[EmbeddingServer] = None,
@@ -73,7 +72,6 @@ class QuestionBatcher:
             mode: Initial mode ('train', 'dev', or 'test')
             use_weighted_hop_sampling: Whether to use weighted hop-based sampling for training batches
             evaluate_paraphrases: Whether to evaluate on paraphrased questions instead of original text
-            multi_answers: Whether to handle multiple answers per question
             seed: Optional seed for random number generation
             force_data_prepro: Whether to force reprocessing of cached data
             embedding_server: Optional pre-initialized embedding server
@@ -99,11 +97,9 @@ class QuestionBatcher:
         self.train_metadata: Dict
         self.question_format: str = question_format
         self.evaluate_paraphrases: bool = evaluate_paraphrases
-        self.multi_answers: bool = multi_answers
         self.train_df, self.dev_df, self.test_df, self.train_metadata = load_qa_data(
             cached_metadata_path=cached_QAMetaData_path,
             raw_QAData_path=raw_QAData_path,
-            multi_answers=multi_answers,
             question_tokenizer_name=question_tokenizer_name,
             entity2id=ent2id,
             relation2id=rel2id,
@@ -112,15 +108,16 @@ class QuestionBatcher:
             force_recompute=force_data_prepro,
         )
 
-        self.path_exists = True if self.train_metadata.get("paths_column") is not None else False
+        self.multi_answers: bool = self.train_metadata.get("is_multi_answer", False)
+        self.path_exists: bool = True if self.train_metadata.get("paths_column") is not None else False
+        self.path_key_exists: bool = True if self.train_metadata.get("path_keys_column") is not None else False
+
         if question_format == 'paraphrased' and self.train_metadata.get("question_paraphrased_column") is None:
             raise ValueError("Paraphrased questions are requested but not available in the dataset.")
         if evaluate_paraphrases and self.train_metadata.get("question_paraphrased_column") is None:
             raise ValueError("Paraphrased questions are requested but not available in the dataset.")
         if question_format == 'relation_only' and not(self.path_exists):
             raise ValueError("Relation-only format is requested but no path information is available in the dataset.")
-        if self.multi_answers and not self.train_metadata.get("is_multi_answer"):
-            raise ValueError("Multi-answer mode is requested but the dataset is not multi-answer.")
 
 
         if evaluate_paraphrases:
@@ -266,6 +263,33 @@ class QuestionBatcher:
             Number of questions in current mode's dataset
         """
         return len(self.eval_df)
+    
+    def has_multi_answers(self) -> bool:
+        """
+        Check if the current dataset contains questions with multiple answers.
+        
+        Returns:
+            True if the dataset is multi-answer, False otherwise
+        """
+        return self.multi_answers
+    
+    def has_paths(self) -> bool:
+        """
+        Check if the current dataset contains path information.
+        
+        Returns:
+            True if path information is available, False otherwise
+        """
+        return self.path_exists
+    
+    def has_path_keys(self) -> bool:
+        """
+        Check if the current dataset contains path key information.
+        
+        Returns:
+            True if path key information is available, False otherwise
+        """
+        return self.path_key_exists
 
     def yield_next_batch_train(self) -> Generator[Tuple[List[str], Union[np.ndarray, List[List[int]]], np.ndarray, np.ndarray], None, None]:
         """
@@ -298,6 +322,7 @@ class QuestionBatcher:
             source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)
             answers: Union[np.ndarray, List[List[int]]] = batch['Answer-Entity'].to_numpy(dtype=int) if not self.multi_answers else batch['Answer-Entity'].tolist()
             paths: List[List[List[str, str, str]]] = batch['Paths'].tolist() if self.path_exists else None
+            path_keys: List[List[str]] = batch['Path-Key'].tolist() if self.path_key_exists else None
             ques_ids: List[int] = batch['Question-Number'].tolist()
 
             # Extract questions based on the specified format
@@ -318,7 +343,7 @@ class QuestionBatcher:
                 questions: List[List[int]] = self.tokenize_questions([""] * len(batch)) 
                 question_embeddings = np.zeros((len(questions), self.get_embedding_dim()), dtype=np.float32)
 
-                yield questions, question_embeddings, source_ent, answers, paths, ques_ids
+                yield questions, question_embeddings, source_ent, answers, paths, path_keys, ques_ids
                 continue # skip embedding generation
 
             # Generate embeddings via the embedding server
@@ -329,7 +354,7 @@ class QuestionBatcher:
                 sep_id=self.sep_id,
                 max_length=128,
             )
-            yield questions, question_embeddings, source_ent, answers, paths, ques_ids
+            yield questions, question_embeddings, source_ent, answers, paths, path_keys, ques_ids
 
     def yield_next_batch_test(self) -> Generator[Tuple[List[str], Union[np.ndarray, List[List[int]]], np.ndarray, np.ndarray], None, None]:
         """
@@ -367,6 +392,7 @@ class QuestionBatcher:
             source_ent: np.ndarray = batch["Source-Entity"].to_numpy(dtype=int)
             answers: Union[np.ndarray, List[List[int]]] = batch['Answer-Entity'].to_numpy(dtype=int) if not self.multi_answers else batch['Answer-Entity'].tolist()
             paths: List[List[List[str, str, str]]] = batch['Paths'].tolist() if self.path_exists else None
+            path_keys: List[List[str]] = batch['Path-Key'].tolist() if self.path_key_exists else None
             ques_ids: List[int] = batch['Question-Number'].tolist()
 
             # Extract questions based on the specified format
@@ -385,7 +411,7 @@ class QuestionBatcher:
                 questions: List[List[int]] = self.tokenize_questions([""] * len(batch)) 
                 question_embeddings = np.zeros((len(questions), self.get_embedding_dim()), dtype=np.float32)
 
-                yield questions, question_embeddings, source_ent, answers, paths, ques_ids
+                yield questions, question_embeddings, source_ent, answers, paths, path_keys, ques_ids
                 continue # skip embedding generation
 
             # Generate embeddings via the embedding server
@@ -397,7 +423,7 @@ class QuestionBatcher:
                 max_length=128,
             )
 
-            yield questions, question_embeddings, source_ent, answers, paths, ques_ids
+            yield questions, question_embeddings, source_ent, answers, paths, path_keys, ques_ids
 
     def translate_entities(self, entity_ids: np.ndarray, dynamic_list: bool = False) -> List[str]:
         """

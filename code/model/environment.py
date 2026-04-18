@@ -98,6 +98,7 @@ class EpisodeNLQ(object):
         mode: str,
         multi_answers: bool = False,
         paths: Optional[List[List[Tuple[int, int, int]]]] = None,
+        path_keys: Optional[List[List[int]]] = None,
     ) -> None:
         """
         Initialize a reinforcement learning episode for knowledge graph reasoning.
@@ -123,6 +124,8 @@ class EpisodeNLQ(object):
             multi_answers: Whether each question can have multiple correct answers.
             paths: Optional ground-truth paths (one per question), where each path is a list
                 of edges (head, relation, tail) using integer IDs.
+            path_keys: Optional list of path keys (e.g., relation sequences) corresponding to paths,
+                for analysis/logging.
 
         Note:
             - Internally repeats start_entities/question_embeddings for multiple rollouts.
@@ -135,7 +138,9 @@ class EpisodeNLQ(object):
         self.num_rollouts = num_rollouts
         self.multi_answers = multi_answers
         self.paths = paths
+        self.path_keys = path_keys
         self.paths_exists = paths is not None
+        self.path_key_exists = path_keys is not None
         self.current_hop = 0
         self.no_examples = start_entities.shape[0]
         self.positive_reward = positive_reward
@@ -450,8 +455,22 @@ class EpisodeNLQ(object):
         """
         if self.paths_exists:
             return len(self.paths[idx])
+        elif self.path_key_exists:
+            return len(self.path_keys[idx])
         else:
             return 0
+        
+    def get_path_key(self, idx: int) -> Optional[List[int]]:
+        """
+        Get the path key (e.g., relation sequence) for a given question index.
+
+        Returns:
+            A list of integers representing the path key for the question; or None if path keys are not available.
+        """
+        if self.path_key_exists:
+            return self.path_keys[idx]
+        else:
+            return None
     
     # 6-b) Edge / relation helpers
     def canon_edge(self, h: int, r: int, t: int) -> Tuple[int, int, int]:
@@ -722,15 +741,15 @@ class EpisodeNLQ(object):
             recall: Fraction of ground-truth relations recovered by the predicted relation set.
             f1_score: Harmonic mean of precision and recall.
         """
-        assert self.paths_exists, "No ground-truth paths available for faithfulness evaluation!"
-        gt_path = self.paths[idx]
+        assert self.paths_exists or self.path_key_exists, "No ground-truth paths available for faithfulness evaluation!"
+        gt_path = self.paths[idx] if self.paths_exists else self.path_keys[idx]
 
         pred_rels = set(
             self.grapher.inverse_mapping.get(r, r)      # map inverse tokens back to their original relation for evaluation purposes (e.g. _relation -> relation)
             for r in pred_relations
             if r not in self.special_tokens               #   remove cycles and stop/restart signals
         )
-        gt_rels = set(r for _, r, _ in gt_path)
+        gt_rels = set(r for _, r, _ in gt_path) if self.paths_exists else set(gt_path)  # if using path keys, gt_path is already a list of relations
 
         tp = len(pred_rels & gt_rels)
         fp = len(pred_rels - gt_rels)
@@ -924,7 +943,6 @@ class EnvNLQ(object):
         relation_vocab: Dict[str, int], 
         mode: str = 'train',
         evaluate_paraphrases: bool = False,
-        multi_answers: bool = False,
         use_weighted_hop_sampling: bool = False,
         use_full_graph: bool = False,
         use_directed_graph: bool = True,
@@ -959,7 +977,6 @@ class EnvNLQ(object):
             relation_vocab: Mapping from relation names to unique integer IDs  
             mode: Operation mode - 'train' for training, 'dev'/'test' for evaluation
             evaluate_paraphrases: Whether to evaluate on paraphrased questions instead of original text
-            multi_answers: Whether to handle questions with multiple correct answers
             use_weighted_hop_sampling: Whether to use weighted sampling of hops during training
             use_full_graph: Whether to use the full graph (including test/dev triples) or only training graph
             use_directed_graph: Whether to treat the graph as directed (no inverse relations) or undirected (include inverse relations)
@@ -983,7 +1000,6 @@ class EnvNLQ(object):
         self.path_len = path_length
         self.test_batch_size = test_batch_size
         self.test_rollouts = test_rollouts
-        self.multi_answers = multi_answers
         self.evaluate_paraphrases = evaluate_paraphrases
         self.use_weighted_hop_sampling = use_weighted_hop_sampling
         input_dir = data_input_dir
@@ -995,7 +1011,6 @@ class EnvNLQ(object):
             question_tokenizer_name=question_tokenizer_name,
             cached_QAMetaData_path=cached_QAMetaData_path,
             question_format=question_format,
-            multi_answers=multi_answers,
             use_weighted_hop_sampling=use_weighted_hop_sampling,
             evaluate_paraphrases=evaluate_paraphrases,
             raw_QAData_path=raw_QAData_path,
@@ -1004,7 +1019,10 @@ class EnvNLQ(object):
             seed=seed,
             embedding_server=embedding_server,
         )
-        self.paths_exists = self.batcher.path_exists
+
+        self.paths_exists = self.batcher.has_paths()
+        self.path_key_exists = self.batcher.has_path_keys()
+        self.multi_answers = self.batcher.has_multi_answers()
 
         self.total_no_examples = self.batcher.get_question_num()
         self.token_embedding_dim = self.batcher.get_embedding_dim()
@@ -1045,7 +1063,7 @@ class EnvNLQ(object):
         """
         if self.mode == 'train':
             for data in self.batcher.yield_next_batch_train():
-                question_tokens, question_embeddings, start_entities, end_entities, _, _ = data
+                question_tokens, question_embeddings, start_entities, end_entities, _, _, _ = data
                 yield EpisodeNLQ(
                     self.grapher, 
                     question_tokens,
@@ -1060,12 +1078,13 @@ class EnvNLQ(object):
                     mode=self.mode,
                     multi_answers=self.multi_answers,
                     paths=None,
+                    path_keys=None,
                 )
         else:
             for data in self.batcher.yield_next_batch_test():
                 if data == None:
                     return
-                question_tokens, question_embeddings, start_entities, end_entities, paths, ques_ids = data
+                question_tokens, question_embeddings, start_entities, end_entities, paths, path_keys, ques_ids = data
                 yield EpisodeNLQ(
                     self.grapher, 
                     question_tokens,
@@ -1080,6 +1099,7 @@ class EnvNLQ(object):
                     mode=self.mode,
                     multi_answers=self.multi_answers,
                     paths=paths,
+                    path_keys=path_keys,
                 )
 
     def change_mode(self, mode: str) -> None:
@@ -1129,7 +1149,7 @@ class EnvNLQ(object):
         """
         self.test_rollouts = test_rollouts
 
-    def check_paths_exist(self) -> bool:
+    def has_paths(self) -> bool:
         """
         Check if ground-truth paths are available for faithfulness evaluation.
         
@@ -1141,3 +1161,47 @@ class EnvNLQ(object):
             True if ground-truth paths are available, False otherwise
         """
         return self.paths_exists
+    
+    def has_path_keys(self) -> bool:
+        """
+        Check if relation chains are available for path-based evaluation 
+        (important if path  does not exist but path keys do, e.g. for 
+        Multi-Answers).
+        
+        Path keys are used to evaluate path-based metrics even when explicit 
+        paths are not provided  for all questions (e.g., in multi-answer 
+        settings where some questions may have paths for some answers but not 
+        others). This function indicates whether such path keys are available 
+        for the current batch of questions.
+        
+        Returns:
+            True if path keys are available, False otherwise
+        """
+        return self.path_key_exists
+    
+    def has_paths_or_keys(self) -> bool:
+        """
+        Check if either ground-truth paths or path keys are available for evaluation.
+        
+        Returns whether the current batch of questions includes either explicit
+        ground-truth paths or path keys (relation chains) that can be used for
+        path-based evaluation metrics. This is a more general check than has_paths()
+        or has_path_keys() alone.
+        
+        Returns:
+            True if either paths or path keys are available, False otherwise
+        """
+        return self.paths_exists or self.path_key_exists
+    
+    def has_multi_answers(self) -> bool:
+        """
+        Check if the current batch of questions includes multiple correct answers.
+        
+        Returns whether the questions in the current batch have multiple valid
+        answer entities. This information is used to determine if multi-answer
+        coverage metrics can be computed.
+        
+        Returns:
+            True if multiple answers are present, False otherwise
+        """
+        return self.multi_answers

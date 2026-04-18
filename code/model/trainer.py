@@ -170,7 +170,6 @@ class TrainerNLQ(object):
         entity_vocab: Dict[str, int],
         relation_vocab: Dict[str, int],
         evaluate_paraphrases: bool = False,
-        multi_answers: bool = False,
         use_weighted_hop_sampling: bool = False,
         use_full_graph: bool = False,
         use_directed_graph: bool = False,
@@ -229,7 +228,6 @@ class TrainerNLQ(object):
             entity_vocab: Entity name to integer ID mapping for embedding lookup
             relation_vocab: Relation name to integer ID mapping for embedding lookup
             evaluate_paraphrases: Whether to evaluate on paraphrased questions instead of original text
-            multi_answers: Whether to handle questions with multiple correct answers
             use_weighted_hop_sampling: Whether to use weighted hop-based sampling for training batches
             use_full_graph: Whether to use the full knowledge graph (train + dev + test) or only the training subgraph
             use_directed_graph: Whether to treat the graph as directed (no inverse relations) or undirected (include inverse relations)
@@ -259,7 +257,6 @@ class TrainerNLQ(object):
         self.question_format = question_format
         self.cached_QAMetaData_path = cached_QAMetaData_path
         self.raw_QAData_path = raw_QAData_path
-        self.multi_answers = multi_answers
         self.evaluate_paraphrases = evaluate_paraphrases
         self.max_num_actions = max_num_actions
         self.embedding_size = embedding_size
@@ -312,7 +309,6 @@ class TrainerNLQ(object):
             raw_QAData_path=raw_QAData_path,
             force_data_prepro=force_data_prepro,
             evaluate_paraphrases=evaluate_paraphrases,
-            multi_answers=multi_answers,
             max_num_actions=max_num_actions,
             entity_vocab=entity_vocab, 
             relation_vocab=relation_vocab, 
@@ -951,16 +947,13 @@ class TrainerNLQ(object):
             all_post_restart_success_rate_top_rollout = None
             all_restart_and_hit_rate_top_rollout = None
 
-        if self.environment.check_paths_exist():
+        if self.environment.has_paths():
             all_final_path_recall = 0
             all_final_path_precision = 0
             all_final_path_f1 = 0
             all_final_node_recall = 0
             all_final_node_precision = 0
             all_final_node_f1 = 0
-            all_final_rel_recall = 0
-            all_final_rel_precision = 0
-            all_final_rel_f1 = 0
             all_edit_distance = 0
         else:
             all_final_path_recall = None
@@ -969,10 +962,17 @@ class TrainerNLQ(object):
             all_final_node_recall = None
             all_final_node_precision = None
             all_final_node_f1 = None
+            all_edit_distance = None
+        
+        if self.environment.has_paths_or_keys():
+            all_final_rel_recall = 0
+            all_final_rel_precision = 0
+            all_final_rel_f1 = 0
+        else:
             all_final_rel_recall = None
             all_final_rel_precision = None
             all_final_rel_f1 = None
-            all_edit_distance = None
+
         mrr = 0                         # Overall results for MRR
 
         # Changing the environment to test/dev data and resetting values
@@ -1231,7 +1231,7 @@ class TrainerNLQ(object):
                     all_post_restart_success_rate_top_rollout += restart_mask & sample_hit
                     all_restart_and_hit_rate_top_rollout += restart_mask & sample_hit
 
-                if self.environment.check_paths_exist():   # If path existence checking is enabled
+                if self.environment.has_paths():   # If path existence checking is enabled
                     precision, recall, f1_score = episode.get_subgraph_overlap(merged_path, b)
                     all_final_path_precision += precision
                     all_final_path_recall += recall
@@ -1243,20 +1243,21 @@ class TrainerNLQ(object):
                     all_final_node_recall += recall
                     all_final_node_f1 += f1_score
 
+                    ed_dist = episode.get_path_edit_distance(merged_path, b)
+                    all_edit_distance += ed_dist
+                
+                if self.environment.has_paths_or_keys():   # If relation path existence checking is enabled
                     precision, recall, f1_score = episode.get_relation_coverage(relations_path, b)
                     all_final_rel_precision += precision
                     all_final_rel_recall += recall
                     all_final_rel_f1 += f1_score
-
-                    ed_dist = episode.get_path_edit_distance(merged_path, b)
-                    all_edit_distance += ed_dist
                 
                 # Comprehensive reasoning path report
                 if print_paths:
                     # Retrive Sample's context
                     question_txt = self.environment.batcher.translate_questions([episode.question_tokens[b]])[0]                # Convert question back to text
                     start_e = self.environment.batcher.translate_entities([entities_path[0]])[0]                                # Map id to entity for source node
-                    if self.multi_answers:
+                    if self.environment.has_multi_answers():
                         end_e = self.environment.batcher.translate_entities([episode.end_entities[b]], dynamic_list=True)       # Map id to entity for answer node
                     else:
                         end_e = self.environment.batcher.translate_entities([episode.end_entities[b * effective_rollouts]])[0]  # Map id to entity for answer node
@@ -1264,7 +1265,7 @@ class TrainerNLQ(object):
                     agent_hop = len(merged_path)
 
                     # Check if gold path exists and retrieve it for comparison
-                    if self.environment.check_paths_exist():
+                    if self.environment.has_paths():
                         gt_hop = episode.get_path_length(b)
                         gt_path = episode.get_path(b)  # Get the gold path for this question
                         gt_entities = self.environment.batcher.translate_entities([step[0] for step in gt_path] + [gt_path[-1][2]])
@@ -1272,6 +1273,13 @@ class TrainerNLQ(object):
                         gt_path = f"{gt_entities[0]}"
                         for ent, rel in zip(gt_entities[1:], gt_relations):
                             gt_path += f" --[{rel}]--> {ent}"
+                    elif self.environment.has_path_keys():
+                        gt_hop = episode.get_path_length(b)
+                        gt_path = episode.get_path_key(b)  # Get the gold path for this question
+                        gt_relations = self.environment.batcher.translate_relations(gt_path)
+                        gt_path = f"[{gt_relations[0]}]"
+                        for rel in gt_relations[1:]:
+                            gt_path += f" --> [{rel}] "
 
                     # Question Header Information
                     paths[question_txt].append(f"{question_txt.strip().capitalize()}\n")
@@ -1286,7 +1294,7 @@ class TrainerNLQ(object):
                     paths[question_txt].append(f"Predicted Ans:    {entities_path[-1]}\n")
 
                     # Print Paths
-                    if self.environment.check_paths_exist(): paths[question_txt].append(f"Gold Path:        {gt_path}\n")
+                    if self.environment.has_paths_or_keys(): paths[question_txt].append(f"Gold Path:        {gt_path}\n")
                     
                     question_path = entities_path[0]
                     for ent, rel in zip(entities_path[1:], relations_path):
@@ -1299,13 +1307,13 @@ class TrainerNLQ(object):
                     paths[question_txt].append(f"Path (Raw):       {question_path_raw}\n")
 
                     # Print Metrics
-                    if self.environment.check_paths_exist(): 
+                    if self.environment.has_paths(): 
                         paths[question_txt].append(f"Path F1 Score(↑): {path_f1:.4f}\n")
                         paths[question_txt].append(f"Edit Distance(↓): {ed_dist:.4f}\n")
                     paths[question_txt].append(f"Neg LogProb(↓):   {(-self.log_probs[b, r]):.6f}\n")
 
                     # Print Hop Count and Hit@1
-                    if self.environment.check_paths_exist(): paths[question_txt].append(f"Gold Hop Count:   {gt_hop}\n")
+                    if self.environment.has_paths_or_keys(): paths[question_txt].append(f"Gold Hop Count:   {gt_hop}\n")
                     paths[question_txt].append(f"Agent Hop Count:  {agent_hop}\n")
                     paths[question_txt].append(f"Solved (Hit@1):   {bool(ans_reshape[b, r])}\n")
                     paths[question_txt].append("\n" + "=" * 40 + "\n") # clear distinction for different attempts of same question
@@ -1363,7 +1371,7 @@ class TrainerNLQ(object):
             all_restart_any_rate_top_rollout /= total_examples
             all_restart_and_hit_rate_top_rollout /= total_examples
 
-        if self.environment.check_paths_exist():
+        if self.environment.has_paths():
             all_final_path_recall /= total_examples
             all_final_path_precision /= total_examples
             all_final_path_f1 /= total_examples
@@ -1372,11 +1380,12 @@ class TrainerNLQ(object):
             all_final_node_precision /= total_examples
             all_final_node_f1 /= total_examples
 
+            all_edit_distance /= total_examples
+        
+        if self.environment.has_paths_or_keys():
             all_final_rel_recall /= total_examples
             all_final_rel_precision /= total_examples
             all_final_rel_f1 /= total_examples
-
-            all_edit_distance /= total_examples
 
         # Save best performing model based on hits@1
         if save_model:
@@ -1454,7 +1463,7 @@ class TrainerNLQ(object):
             score_file.write(f"\tRecall: {all_final_answer_recall:7.4f}\n")
             score_file.write(f"\tPrecision: {all_final_answer_precision:7.4f}\n")
             score_file.write(f"\tF1 Score: {all_final_answer_f1:7.4f}\n")
-            if self.environment.check_paths_exist():
+            if self.environment.has_paths():
                 score_file.write(f"GT-Edge Overlap Metrics\n")
                 score_file.write(f"\tRecall: {all_final_path_recall:7.4f}\n")
                 score_file.write(f"\tPrecision: {all_final_path_precision:7.4f}\n")
@@ -1465,13 +1474,14 @@ class TrainerNLQ(object):
                 score_file.write(f"\tPrecision: {all_final_node_precision:7.4f}\n")
                 score_file.write(f"\tF1 Score: {all_final_node_f1:7.4f}\n")
 
+                score_file.write("Path Edit Distance Metrics:\n")
+                score_file.write(f"\tNormalized: {all_edit_distance:7.4f}\n")
+            
+            if self.environment.has_paths_or_keys():
                 score_file.write(f"Relation-Set Overlap Metrics\n")
                 score_file.write(f"\tRecall: {all_final_rel_recall:7.4f}\n")
                 score_file.write(f"\tPrecision: {all_final_rel_precision:7.4f}\n")
                 score_file.write(f"\tF1 Score: {all_final_rel_f1:7.4f}\n")
-
-                score_file.write("Path Edit Distance Metrics:\n")
-                score_file.write(f"\tNormalized: {all_edit_distance:7.4f}\n")
 
             score_file.write("\n") 
 
@@ -1519,7 +1529,7 @@ class TrainerNLQ(object):
         logger.info(f"\tRecall: {all_final_answer_recall:7.4f}")
         logger.info(f"\tPrecision: {all_final_answer_precision:7.4f}")
         logger.info(f"\tF1 Score: {all_final_answer_f1:7.4f}")
-        if self.environment.check_paths_exist():
+        if self.environment.has_paths():
             logger.info("GT-Edge Overlap Metrics:")
             logger.info(f"\tRecall: {all_final_path_recall:7.4f}")
             logger.info(f"\tPrecision: {all_final_path_precision:7.4f}")
@@ -1530,13 +1540,14 @@ class TrainerNLQ(object):
             logger.info(f"\tPrecision: {all_final_node_precision:7.4f}")
             logger.info(f"\tF1 Score: {all_final_node_f1:7.4f}")
 
+            logger.info("Path Edit Distance Metrics:")
+            logger.info(f"\tNormalized: {all_edit_distance:7.4f}")
+        
+        if self.environment.has_paths_or_keys():
             logger.info("Relation-Set Overlap Metrics:")
             logger.info(f"\tRecall: {all_final_rel_recall:7.4f}")
             logger.info(f"\tPrecision: {all_final_rel_precision:7.4f}")
             logger.info(f"\tF1 Score: {all_final_rel_f1:7.4f}")
-
-            logger.info("Path Edit Distance Metrics:")
-            logger.info(f"\tNormalized: {all_edit_distance:7.4f}")
 
         # Log evaluation metrics to WANDB
         if self.use_wandb and wandb.run:
@@ -1997,7 +2008,6 @@ if __name__ == '__main__':
             raw_QAData_path=options['raw_QAData_path'],
             force_data_prepro=options['force_data_prepro'],
             evaluate_paraphrases=options['evaluate_paraphrases'],
-            multi_answers=options['multi_answers'],
             max_num_actions=options['max_num_actions'],
             embedding_size=options['embedding_size'],
             hidden_size=options['hidden_size'],
@@ -2071,7 +2081,6 @@ if __name__ == '__main__':
         raw_QAData_path=options['raw_QAData_path'],
         force_data_prepro=False,  # Don't force data preprocessing during evaluation, use cached data if available
         evaluate_paraphrases=options['evaluate_paraphrases'],
-        multi_answers=options['multi_answers'],
         max_num_actions=options['max_num_actions'],
         embedding_size=options['embedding_size'],
         hidden_size=options['hidden_size'],
