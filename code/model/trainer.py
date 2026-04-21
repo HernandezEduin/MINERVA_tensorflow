@@ -882,9 +882,9 @@ class TrainerNLQ(object):
         all_final_redundancy = 0
         all_final_segment_hops = 0
 
-        all_hop_accuracy = np.zeros((self.path_length+1,)) * 1.0    # Average hop accuracy at each step across all episodes
-        all_hop_mrr = np.zeros((self.path_length+1,)) * 1.0         # Average MRR at each step across all episodes
-        all_hop_count = np.zeros((self.path_length+1,))       # Average number of hops taken at each step across all episodes
+        all_hop_accuracy = defaultdict(float)  # Accuracy at each hop across all episodes, stored as {hop_index: (correct_count, total_count)}
+        all_hop_mrr = defaultdict(float)       # MRR at each hop across all episodes, stored as {hop_index: (mrr_sum, total_count)}
+        all_hop_count = defaultdict(float)     # Count of episodes that reached each hop, stored as {hop_index: count}
 
         all_final_answer_recall = 0
         all_final_answer_precision = 0
@@ -943,7 +943,8 @@ class TrainerNLQ(object):
             all_final_node_recall = 0
             all_final_node_precision = 0
             all_final_node_f1 = 0
-            all_edit_distance = 0
+            all_edit_distance = defaultdict(float)
+            overall_edit_distance = 0
         else:
             all_final_path_recall = None
             all_final_path_precision = None
@@ -952,15 +953,20 @@ class TrainerNLQ(object):
             all_final_node_precision = None
             all_final_node_f1 = None
             all_edit_distance = None
+            overall_edit_distance = None
         
         if self.environment.has_paths_or_keys():
             all_final_rel_recall = 0
             all_final_rel_precision = 0
             all_final_rel_f1 = 0
+            all_rel_edit_distance = defaultdict(float)
+            overall_rel_edit_distance = 0
         else:
             all_final_rel_recall = None
             all_final_rel_precision = None
             all_final_rel_f1 = None
+            all_rel_edit_distance = None
+            overall_rel_edit_distance = None
 
         mrr = 0                         # Overall results for MRR
 
@@ -1258,13 +1264,16 @@ class TrainerNLQ(object):
                     all_final_node_f1 += f1_score
 
                     ed_dist = episode.get_path_edit_distance(merged_path, b)
-                    all_edit_distance += ed_dist
+                    all_edit_distance[gt_hop] += ed_dist
                 
                 if self.environment.has_paths_or_keys():   # If relation path existence checking is enabled
                     precision, recall, f1_score = episode.get_relation_coverage(relations_path, b)
                     all_final_rel_precision += precision
                     all_final_rel_recall += recall
                     all_final_rel_f1 += f1_score
+
+                    ed_dist = episode.get_relation_edit_distance(relations_path, b)
+                    all_rel_edit_distance[gt_hop] += ed_dist
                 
                 # Comprehensive reasoning path report
                 if print_paths:
@@ -1347,12 +1356,9 @@ class TrainerNLQ(object):
         all_final_reward_20 /= total_examples
         mrr /= total_examples
 
-        hop_accuracy: dict[int, float] = {}
-        hop_mrr: dict[int, float] = {}
-        for i0 in range(self.path_length + 1):
-            if all_hop_count[i0] > 0: 
-                hop_accuracy[i0] = all_hop_accuracy[i0] / all_hop_count[i0]
-                hop_mrr[i0] = all_hop_mrr[i0] / all_hop_count[i0]
+        for i0 in all_hop_accuracy.keys():
+            all_hop_accuracy[i0] /= all_hop_count[i0]
+            all_hop_mrr[i0] /= all_hop_count[i0]
 
         all_valid_action_count /= total_examples
         all_final_question_entropy /= total_examples
@@ -1404,12 +1410,18 @@ class TrainerNLQ(object):
             all_final_node_precision /= total_examples
             all_final_node_f1 /= total_examples
 
-            all_edit_distance /= total_examples
+            overall_edit_distance = sum(all_edit_distance.values()) / sum(all_hop_count.values())
+            for hop in all_edit_distance.keys():
+                all_edit_distance[hop] /= all_hop_count[hop]
         
         if self.environment.has_paths_or_keys():
             all_final_rel_recall /= total_examples
             all_final_rel_precision /= total_examples
             all_final_rel_f1 /= total_examples
+
+            overall_rel_edit_distance = sum(all_rel_edit_distance.values()) / sum(all_hop_count.values())
+            for hop in all_rel_edit_distance.keys():
+                all_rel_edit_distance[hop] /= all_hop_count[hop]
 
         # Save best performing model based on hits@1
         if save_model:
@@ -1451,15 +1463,15 @@ class TrainerNLQ(object):
             score_file.write(f"\tMRR: {mrr:7.4f}\n")
             
             score_file.write(f"Per Hop Answer Metrics\n")
-            for i0 in hop_accuracy:
+            for i0 in all_hop_accuracy.keys():
                 score_file.write(f"\t{i0}-Hop\n")
-                score_file.write(f"\t\tHits@1: {hop_accuracy[i0]:7.4f}\n")
-                score_file.write(f"\t\tMRR: {hop_mrr[i0]:7.4f}\n")
+                score_file.write(f"\t\tHits@1: {all_hop_accuracy[i0]:7.4f}\n")
+                score_file.write(f"\t\tMRR: {all_hop_mrr[i0]:7.4f}\n")
 
-            score_file.write(f"Average Valid Action Count at Each Step\n")
-            for i, count in enumerate(all_valid_action_count):
-                score_file.write(f"\tStep {i+1}: {count:7.4f}\n")
+            score_file.write(f"Valid Action Count at Each Step\n")
             score_file.write(f"\tOverall Average: {all_valid_action_count.mean():7.4f}\n")
+            for i, count in enumerate(all_valid_action_count):
+                score_file.write(f"\t\tStep {i+1}: {count:7.4f}\n")
             
             score_file.write(f"Entropy Metrics\n")
             score_file.write(f"\tQuestion Entropy: {all_final_question_entropy:7.4f}\n")
@@ -1517,13 +1529,20 @@ class TrainerNLQ(object):
                 score_file.write(f"\tF1 Score: {all_final_node_f1:7.4f}\n")
 
                 score_file.write("Path Edit Distance Metrics:\n")
-                score_file.write(f"\tNormalized: {all_edit_distance:7.4f}\n")
+                score_file.write(f"\tOverall Average: {overall_edit_distance:7.4f}\n")
+                for hop in all_edit_distance.keys():
+                    score_file.write(f"\t\t{hop}-Hop: {all_edit_distance[hop]:7.4f}\n")
             
             if self.environment.has_paths_or_keys():
                 score_file.write(f"Relation-Set Overlap Metrics\n")
                 score_file.write(f"\tRecall: {all_final_rel_recall:7.4f}\n")
                 score_file.write(f"\tPrecision: {all_final_rel_precision:7.4f}\n")
                 score_file.write(f"\tF1 Score: {all_final_rel_f1:7.4f}\n")
+
+                score_file.write("Relation Edit Distance Metrics:\n")
+                score_file.write(f"\tOverall Average: {overall_rel_edit_distance:7.4f}\n")
+                for hop in all_rel_edit_distance.keys():
+                    score_file.write(f"\t\t{hop}-Hop: {all_rel_edit_distance[hop]:7.4f}\n")
 
             score_file.write("\n") 
 
@@ -1536,15 +1555,15 @@ class TrainerNLQ(object):
         logger.info(f"\tMRR: {mrr:7.4f}")
 
         logger.info(f"Per Hop Answer Metrics\n")
-        for i0 in hop_accuracy:
+        for i0 in all_hop_accuracy.keys():
             logger.info(f"\t{i0}-Hop\n")
-            logger.info(f"\t\tHits@1: {hop_accuracy[i0]:7.4f}\n")
-            logger.info(f"\t\tMRR: {hop_mrr[i0]:7.4f}\n")
+            logger.info(f"\t\tHits@1: {all_hop_accuracy[i0]:7.4f}\n")
+            logger.info(f"\t\tMRR: {all_hop_mrr[i0]:7.4f}\n")
         
         logger.info("Average Valid Action Count at Each Step:")
         logger.info(f"\tOverall Average: {all_valid_action_count.mean():7.4f}")
         for i, count in enumerate(all_valid_action_count):
-            logger.info(f"\tStep {i+1}: {count:7.4f}")
+            logger.info(f"\t\tStep {i+1}: {count:7.4f}")
 
         logger.info("Entropy Metrics:")
         logger.info(f"\tQuestion Entropy: {all_final_question_entropy:7.4f}")
@@ -1601,13 +1620,20 @@ class TrainerNLQ(object):
             logger.info(f"\tF1 Score: {all_final_node_f1:7.4f}")
 
             logger.info("Path Edit Distance Metrics:")
-            logger.info(f"\tNormalized: {all_edit_distance:7.4f}")
+            logger.info(f"\tOverall Average: {overall_edit_distance:7.4f}")
+            for hop in all_edit_distance.keys():
+                logger.info(f"\t\t{hop}-Hop: {all_edit_distance[hop]:7.4f}")
         
         if self.environment.has_paths_or_keys():
             logger.info("Relation-Set Overlap Metrics:")
             logger.info(f"\tRecall: {all_final_rel_recall:7.4f}")
             logger.info(f"\tPrecision: {all_final_rel_precision:7.4f}")
             logger.info(f"\tF1 Score: {all_final_rel_f1:7.4f}")
+
+            logger.info("Relation Edit Distance Metrics:")
+            logger.info(f"\tOverall Average: {overall_rel_edit_distance:7.4f}")
+            for hop in all_rel_edit_distance.keys():
+                logger.info(f"\t\t{hop}-Hop: {all_rel_edit_distance[hop]:7.4f}")
 
         # Log evaluation metrics to WANDB
         if self.use_wandb and wandb.run:
@@ -1658,12 +1684,15 @@ class TrainerNLQ(object):
                     rel_recall=all_final_rel_recall,
                     rel_precision=all_final_rel_precision,
                     rel_f1=all_final_rel_f1,
-                    edit_distance=all_edit_distance,
+                    edit_distance=overall_rel_edit_distance,
+                    edit_distance_by_hop=all_edit_distance,
                     valid_action_count=all_valid_action_count.mean(),
                     question_entropy=all_final_question_entropy,
                     path_entropy=all_final_path_entropy.sum(),
-                    hop_accuracy=hop_accuracy,
-                    hop_mrr=hop_mrr,
+                    hop_accuracy=all_hop_accuracy,
+                    hop_mrr=all_hop_mrr,
+                    rel_edit_distance=overall_rel_edit_distance,
+                    rel_edit_distance_by_hop=all_rel_edit_distance,
                 )
             except Exception as e:
                 logger.error(f"Failed to log {mode} metrics to WANDB: {e}")
@@ -1719,8 +1748,8 @@ class TrainerNLQ(object):
             valid_action_count=all_valid_action_count,
             question_entropy=all_final_question_entropy,
             path_entropy=all_final_path_entropy,
-            hop_accuracy=hop_accuracy,
-            hop_mrr=hop_mrr
+            hop_accuracy=all_hop_accuracy,
+            hop_mrr=all_hop_mrr
         )
 
 
@@ -1948,7 +1977,8 @@ class TrainerNLQ(object):
             f"{mode}/evidence/relation_overlap/precision": _as_float(vals.get("rel_precision")),
             f"{mode}/evidence/relation_overlap/f1": _as_float(vals.get("rel_f1")),
 
-            f"{mode}/evidence/path_edit_distance_norm": _as_float(vals.get("edit_distance")),
+            f"{mode}/evidence/edit_distance/path/nhop": _as_float(vals.get("edit_distance")),
+            f"{mode}/evidence/edit_distance/relation/nhop": _as_float(vals.get("rel_edit_distance")),
 
             f"{mode}/rollout_level/termination_steps": _as_float(vals.get("termination_rollout")),
             f"{mode}/rollout_level/stop_rate": _as_float(vals.get("stop_rate_rollout")),
@@ -1970,6 +2000,12 @@ class TrainerNLQ(object):
             f"{mode}/reasoning/post_restart_success_rate": _as_float(vals.get("post_restart_success_rate")),
             f"{mode}/reasoning/restart_and_hit_rate": _as_float(vals.get("restart_and_hit_rate")),
         }
+
+        for i0 in vals.get("edit_distance_by_hop", {}):
+            optional[f"{mode}/evidence/edit_distance/path/{i0}hop"] = _as_float(vals["edit_distance_by_hop"][i0])
+        
+        for i0 in vals.get("rel_edit_distance_by_hop", {}):
+            optional[f"{mode}/evidence/edit_distance/relation/{i0}hop"] = _as_float(vals["rel_edit_distance_by_hop"][i0])
 
         wandb.log({**base, **_drop_none(optional)})
 

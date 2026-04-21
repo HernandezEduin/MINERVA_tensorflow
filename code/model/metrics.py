@@ -2,6 +2,8 @@ import numpy as np
 
 from collections import namedtuple
 
+from typing import List
+
 EvaluationMetrics = namedtuple('EvaluationMetrics', [
     'hits_at_1', 'hits_at_3', 'hits_at_5', 'hits_at_10', 'hits_at_20', 
     'answer_recall', 'answer_precision', 'answer_f1',
@@ -47,3 +49,44 @@ def entropy_from_log_probs(
     if base == np.e:
         return entropy_nats
     return entropy_nats / np.log(base)
+
+def edit_distance(seq1: List[int], seq2: List[int]) -> int:
+    """
+    Compute the edit distance between two sequences of integers.
+
+    Edit distance is defined as the minimum number of insertions, deletions, or substitutions
+    required to transform seq1 into seq2.
+
+    Args:
+        seq1: First sequence of integers.
+        seq2: Second sequence of integers.
+
+    Returns:
+        edit_distance (int): The computed edit distance between seq1 and seq2.
+    """
+    m = len(seq1)
+    n = len(seq2)
+
+    if m == 0 and n == 0:
+        return 0.0, m, n
+    if m == 0 or n == 0:
+        return max(m, n), m, n
+
+    dp = np.zeros((m + 1, n + 1), dtype=int)
+
+    for i0 in range(m + 1):
+        dp[i0][0] = i0  # Deletion cost
+    for j0 in range(n + 1):
+        dp[0][j0] = j0  # Insertion cost
+
+    for i0 in range(1, m + 1):
+        for j0 in range(1, n + 1):
+            if seq1[i0 - 1] == seq2[j0 - 1]:
+                dp[i0][j0] = dp[i0 - 1][j0 - 1]  # No cost if elements match
+            else:
+                dp[i0][j0] = min(
+                    dp[i0 - 1][j0] + 1,    # Deletion
+                    dp[i0][j0 - 1] + 1,    # Insertion
+                    dp[i0 - 1][j0 - 1] + 1 # Substitution
+                )
+    return dp[m][n], m, n

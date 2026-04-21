@@ -35,6 +35,7 @@ import numpy as np
 from code.data.embedding_server import EmbeddingServer
 from code.data.feed_data import QuestionBatcher
 from code.data.grapher import RelationEntityGrapher
+from code.model.metrics import edit_distance
 
 from typing import Any, Dict, Generator, List, Optional, Set, Union, Tuple, Literal, Sequence
 
@@ -537,6 +538,17 @@ class EpisodeNLQ(object):
             h, t = t, h
         return (h, r, t)
     
+    def canon_rel(self, r: int) -> int:
+        """
+        Convert a relation to its canonical form.
+        If the relation is an inverse token, map it back to the original relation.
+        Returns:
+            r: Canonical relation ID
+        """
+        if r in self.grapher.inverse_tokens:
+            return self.grapher.inverse_mapping[r]
+        return r
+    
     def is_inverse_rel(self, r_prev: int, r_cur: int) -> bool:
         """
         Check if the current relation is the inverse of the previous relation (i.e., backtracking).
@@ -717,34 +729,37 @@ class EpisodeNLQ(object):
         pred_path = [self.canon_edge(h, r, t) for h, r, t in pred_path if r not in self.special_tokens]
         gt_path = [(h, r, t) for h, r, t in gt_path]
 
-        # Create a matrix to compute edit distance using dynamic programming
-        m = len(pred_path)
-        n = len(gt_path)
+        ed_dist, m, n = edit_distance(pred_path, gt_path)
+        return ed_dist/(max(m, n) + 1e-8)  # normalize by path length to get a score between 0 and 1
 
-        if m == 0 and n == 0:
-            return 0.0
-        if m == 0 or n == 0:
-            return 1.0  # normalized by max(m,n)
+    def get_relation_edit_distance(self, pred_rels: List[List[int]], idx: int) -> float:
+        """
+        Compute normalized edit distance between predicted and ground-truth relation sequences.
 
-        dp = np.zeros((m + 1, n + 1), dtype=int)
+        Edit distance is computed via dynamic programming over the edge sequences after filtering
+        special tokens (NO_OP/STOP/RESTART). The returned value is normalized by max(m, n), so it
+        lies in [0, 1], where 0 indicates an exact match.
 
-        for i0 in range(m + 1):
-            dp[i0][0] = i0  # Deletion cost
-        for j0 in range(n + 1):
-            dp[0][j0] = j0  # Insertion cost
+        Args:
+            pred_rels: List of predicted relation IDs.
+            idx: Question index into the ground-truth path list.
 
-        for i0 in range(1, m + 1):
-            for j0 in range(1, n + 1):
-                if pred_path[i0 - 1] == gt_path[j0 - 1]:
-                    dp[i0][j0] = dp[i0 - 1][j0 - 1]  # No cost if edges match
-                else:
-                    dp[i0][j0] = min(
-                        dp[i0 - 1][j0] + 1,    # Deletion
-                        dp[i0][j0 - 1] + 1,    # Insertion
-                        dp[i0 - 1][j0 - 1] + 1 # Substitution
-                    )
-        edit_distance = dp[m][n]
-        return edit_distance/(max(m, n) + 1e-8)  # normalize by path length to get a score between 0 and 1
+        Returns:
+            normalized_edit_distance (float): Edit distance / max(len(pred), len(gt)) in [0, 1].
+
+        Note:
+            - Stricter than set-based overlap because order matters.
+            - Intended for analysis; typically too strict/sparse for reward shaping.
+        """
+        assert self.paths_exists or self.path_key_exists, "No ground-truth paths available for edit distance evaluation!"
+        gt_path = self.paths[idx] if self.paths_exists else self.path_keys[idx]
+
+        # Filter out no-op, restart, and stop signals from both paths
+        pred_rels = [self.canon_rel(r) for r in pred_rels if r not in self.special_tokens]
+        gt_rels = [r for _, r, _ in gt_path] if self.paths_exists else gt_path
+
+        ed_dist, m, n = edit_distance(pred_rels, gt_rels)
+        return ed_dist/(max(m, n) + 1e-8)  # normalize by path length to get a score between 0 and 1
 
     # 7-c) Coverage metrics
     def get_node_coverage(self, pred_entities: List[int], idx: int) -> Tuple[float, float, float]:
