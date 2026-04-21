@@ -882,6 +882,10 @@ class TrainerNLQ(object):
         all_final_redundancy = 0
         all_final_segment_hops = 0
 
+        all_hop_accuracy = np.zeros((self.path_length+1,)) * 1.0    # Average hop accuracy at each step across all episodes
+        all_hop_mrr = np.zeros((self.path_length+1,)) * 1.0         # Average MRR at each step across all episodes
+        all_hop_count = np.zeros((self.path_length+1,))       # Average number of hops taken at each step across all episodes
+
         all_final_answer_recall = 0
         all_final_answer_precision = 0
         all_final_answer_f1 = 0
@@ -1148,6 +1152,8 @@ class TrainerNLQ(object):
                 answer_pos = None
                 seen = set()
                 pos = 0
+                gt_hop = episode.get_path_length(b)
+                all_hop_count[gt_hop] += 1
 
                 if self.pool == 'max':          # Evaluation done based on best performing rollout
                     for r in sorted_indx[b]:    # Go through paths sorted by score (highest first)
@@ -1174,6 +1180,7 @@ class TrainerNLQ(object):
                 # Evaluate the answer position
                 if answer_pos is not None:
                     final_mrr += 1.0/((answer_pos+1))
+                    all_hop_mrr[gt_hop] += 1.0/((answer_pos+1))
                     if answer_pos < 20:
                         final_reward_20 += 1
                         if answer_pos < 10:
@@ -1184,8 +1191,10 @@ class TrainerNLQ(object):
                                     final_reward_3 += 1
                                     if answer_pos < 1:
                                         final_reward_1 += 1
+                                        all_hop_accuracy[gt_hop] += 1
                 else:
                     final_mrr += 0
+                    all_hop_mrr[gt_hop] += 0
                 
                 # Calculate additional metrics
 
@@ -1268,7 +1277,6 @@ class TrainerNLQ(object):
                         end_e = self.environment.batcher.translate_entities([episode.end_entities[b * effective_rollouts]])[0]  # Map id to entity for answer node
                     
                     agent_hop = len(merged_path)
-                    gt_hop = episode.get_path_length(b)
 
                     # Check if gold path exists and retrieve it for comparison
                     if self.environment.has_paths():
@@ -1315,7 +1323,7 @@ class TrainerNLQ(object):
                         paths[question_txt].append(f"Path F1 Score(↑): {path_f1:.4f}\n")
                         paths[question_txt].append(f"Edit Distance(↓): {ed_dist:.4f}\n")
                     paths[question_txt].append(f"Neg LogProb(↓):   {(-self.log_probs[b, r]):.6f}\n")
-                    paths[question_txt].append(f"Path Entropy(↓):     {self.entropies[b,r].sum():.6f}\n")
+                    paths[question_txt].append(f"Path Entropy(↓):  {self.entropies[b,r].sum():.6f}\n")
 
                     # Print Hop Count and Hit@1
                     paths[question_txt].append(f"Gold Hop Count:   {gt_hop}\n")
@@ -1338,6 +1346,13 @@ class TrainerNLQ(object):
         all_final_reward_10 /= total_examples
         all_final_reward_20 /= total_examples
         mrr /= total_examples
+
+        hop_accuracy: dict[int, float] = {}
+        hop_mrr: dict[int, float] = {}
+        for i0 in range(self.path_length + 1):
+            if all_hop_count[i0] > 0: 
+                hop_accuracy[i0] = all_hop_accuracy[i0] / all_hop_count[i0]
+                hop_mrr[i0] = all_hop_mrr[i0] / all_hop_count[i0]
 
         all_valid_action_count /= total_examples
         all_final_question_entropy /= total_examples
@@ -1434,6 +1449,12 @@ class TrainerNLQ(object):
             score_file.write(f"\tHits@10: {all_final_reward_10:7.4f}\n")
             score_file.write(f"\tHits@20: {all_final_reward_20:7.4f}\n")
             score_file.write(f"\tMRR: {mrr:7.4f}\n")
+            
+            score_file.write(f"Per Hop Answer Metrics\n")
+            for i0 in hop_accuracy:
+                score_file.write(f"\t{i0}-Hop\n")
+                score_file.write(f"\t\tHits@1: {hop_accuracy[i0]:7.4f}\n")
+                score_file.write(f"\t\tMRR: {hop_mrr[i0]:7.4f}\n")
 
             score_file.write(f"Average Valid Action Count at Each Step\n")
             for i, count in enumerate(all_valid_action_count):
@@ -1444,7 +1465,7 @@ class TrainerNLQ(object):
             score_file.write(f"\tQuestion Entropy: {all_final_question_entropy:7.4f}\n")
             score_file.write(f"\tPath Entropy: {all_final_path_entropy.sum():7.4f}\n")
             for step in range(self.path_length):
-                score_file.write(f"\tStep {step+1} Entropy: {all_final_path_entropy[step]:7.4f}\n")
+                score_file.write(f"\t\tStep {step+1}: {all_final_path_entropy[step]:7.4f}\n")
 
             score_file.write(f"Reasoning Diagnostics (Top-Rollout)\n")
             score_file.write(f"\tSpecial Step Rate: {all_final_special_step_rate:7.4f}\n")
@@ -1513,17 +1534,23 @@ class TrainerNLQ(object):
         logger.info(f"\tHits@10: {all_final_reward_10:7.4f}")
         logger.info(f"\tHits@20: {all_final_reward_20:7.4f}")
         logger.info(f"\tMRR: {mrr:7.4f}")
+
+        logger.info(f"Per Hop Answer Metrics\n")
+        for i0 in hop_accuracy:
+            logger.info(f"\t{i0}-Hop\n")
+            logger.info(f"\t\tHits@1: {hop_accuracy[i0]:7.4f}\n")
+            logger.info(f"\t\tMRR: {hop_mrr[i0]:7.4f}\n")
         
         logger.info("Average Valid Action Count at Each Step:")
+        logger.info(f"\tOverall Average: {all_valid_action_count.mean():7.4f}")
         for i, count in enumerate(all_valid_action_count):
             logger.info(f"\tStep {i+1}: {count:7.4f}")
-        logger.info(f"\tOverall Average: {all_valid_action_count.mean():7.4f}")
 
         logger.info("Entropy Metrics:")
         logger.info(f"\tQuestion Entropy: {all_final_question_entropy:7.4f}")
         logger.info(f"\tPath Entropy: {all_final_path_entropy.sum():7.4f}")
         for step in range(self.path_length):
-            logger.info(f"\tStep {step+1} Entropy: {all_final_path_entropy[step]:7.4f}")
+            logger.info(f"\t\tStep {step+1}: {all_final_path_entropy[step]:7.4f}")
 
         logger.info("Reasoning Diagnostics (Top-Rollout):")
         logger.info(f"\tSpecial Step Rate: {all_final_special_step_rate:7.4f}")
@@ -1635,6 +1662,8 @@ class TrainerNLQ(object):
                     valid_action_count=all_valid_action_count.mean(),
                     question_entropy=all_final_question_entropy,
                     path_entropy=all_final_path_entropy.sum(),
+                    hop_accuracy=hop_accuracy,
+                    hop_mrr=hop_mrr,
                 )
             except Exception as e:
                 logger.error(f"Failed to log {mode} metrics to WANDB: {e}")
@@ -1687,9 +1716,11 @@ class TrainerNLQ(object):
             rel_precision=all_final_rel_precision,
             rel_f1=all_final_rel_f1,
             edit_distance=all_edit_distance,
-            valid_action_count=all_valid_action_count.mean(),
+            valid_action_count=all_valid_action_count,
             question_entropy=all_final_question_entropy,
-            path_entropy=all_final_path_entropy.sum(),
+            path_entropy=all_final_path_entropy,
+            hop_accuracy=hop_accuracy,
+            hop_mrr=hop_mrr
         )
 
 
@@ -1895,6 +1926,10 @@ class TrainerNLQ(object):
             f"{mode}/reasoning/redundancy": float(vals["redundancy"]),
             f"{mode}/reasoning/segment_hops": float(vals["segment_hops"]),
         }
+
+        for i0 in vals.get("hop_accuracy", {}):
+            base[f"{mode}/answer/{i0}hop/hits@1"] = float(vals["hop_accuracy"][i0])
+            base[f"{mode}/answer/{i0}hop/mrr"] = float(vals["hop_mrr"][i0])
 
         optional = {
             f"{mode}/answer_set/rollout_recall": _as_float(vals.get("answer_recall")),

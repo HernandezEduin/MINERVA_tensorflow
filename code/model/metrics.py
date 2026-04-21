@@ -17,7 +17,8 @@ EvaluationMetrics = namedtuple('EvaluationMetrics', [
     'restart_any_rate', 'post_restart_success_rate', 'restart_and_hit_rate',
     'restart_any_rate_rollout', 'post_restart_success_rate_rollout', 'restart_and_hit_rate_rollout',
     'mrr', 'max_hits_at_1', 'max_mrr',
-    'valid_action_count', 'question_entropy', 'path_entropy'
+    'valid_action_count', 'question_entropy', 'path_entropy',
+    'hop_accuracy', 'hop_mrr',
 ])
 
 def _as_float(x):
