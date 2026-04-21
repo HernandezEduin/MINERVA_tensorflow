@@ -150,6 +150,8 @@ class EpisodeNLQ(object):
         self.use_stop_signal = self.grapher.use_stop_signal
         self.use_restart_signal = self.grapher.use_restart_signal
         self.special_tokens = set([self.grapher.rNO_OP, self.grapher.rSTOP, self.grapher.rRESTART])  # if using stop/restart signals, we want to ignore them in path faithfulness evaluation since they are not part of the original graph
+        self.invalid_rel_tokens = [self.grapher.rPAD, self.grapher.rUNKNOWN, self.grapher.rDUMMY]  # we want to exclude these from the valid action count and path evaluation since they are not valid graph relations
+        self.invalid_ent_tokens = [self.grapher.ePAD, self.grapher.eUNKNOWN]  # we want to exclude these from the valid action count and path evaluation since they are not valid graph entities
 
         # Repeat entities/embeddings for multiple rollouts per question [batch_size,] -> [batch_size * num_rollouts]
         start_entities = np.repeat(start_entities, self.num_rollouts)
@@ -268,6 +270,40 @@ class EpisodeNLQ(object):
         """
         if clipped: return np.clip(self.stop_steps, a_min=0, a_max=self.path_len - 1)
         return self.stop_steps
+
+    def count_valid_action(
+        self,
+        next_entities: np.ndarray,
+        next_relations: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Count valid actions based on next_entities and next_relations, excluding any with invalid relation/entity IDs.
+
+        Preference order:
+        1. Count actions whose relation/entity IDs are not known padding IDs.
+        2. Fall back to counting actions with non-zero probability mass if padding IDs
+            are unavailable.
+
+        Args:
+            next_entities: [B*R, A]
+            next_relations: [B*R, A]
+            fallback_log_probs: [A] log-probabilities, used only as fallback
+
+        Returns:
+            valid_counts: [B*R] integer count of valid actions
+        """
+
+        valid_mask = None
+
+        if self.invalid_ent_tokens:
+            ent_valid = ~np.isin(next_entities, self.invalid_ent_tokens)
+            valid_mask = ent_valid if valid_mask is None else (valid_mask & ent_valid)
+
+        if self.invalid_rel_tokens:
+            rel_valid = ~np.isin(next_relations, self.invalid_rel_tokens)
+            valid_mask = rel_valid if valid_mask is None else (valid_mask & rel_valid)
+
+        return valid_mask.sum(axis=1).astype(np.int32)
 
     # 3) Question encoding
     def get_question_embedding(self) -> np.ndarray:

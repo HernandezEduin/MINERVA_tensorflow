@@ -119,6 +119,9 @@ class RelationEntityGrapher:
         self.rNO_OP: int = relation_vocab['NO_OP']  # No-op relation ID for self-loop
         self.rSTOP: int = relation_vocab['STOP']  # Stop action ID
         self.rRESTART: int = relation_vocab['RESTART']  # Restart action ID
+        self.eUNKNOWN: int = entity_vocab['UNK']  # UNKNOWN entity ID
+        self.rUNKNOWN: int = relation_vocab['UNK']  # UNKNOWN relation ID
+        self.rDUMMY: int = relation_vocab['DUMMY_START_RELATION']  # Dummy start relation ID
         self.triple_store: str = triple_store
         self.relation_vocab: Dict[str, int] = relation_vocab
         self.entity_vocab: Dict[str, int] = entity_vocab

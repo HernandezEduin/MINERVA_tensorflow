@@ -69,7 +69,8 @@ EvaluationMetrics = namedtuple('EvaluationMetrics', [
     'stop_rate_rollout', 'correct_stop_rate_rollout', 'incorrect_stop_rate_rollout', 'hit_wo_stop_rate_rollout',
     'restart_any_rate', 'post_restart_success_rate', 'restart_and_hit_rate',
     'restart_any_rate_rollout', 'post_restart_success_rate_rollout', 'restart_and_hit_rate_rollout',
-    'mrr', 'max_hits_at_1', 'max_mrr'
+    'mrr', 'max_hits_at_1', 'max_mrr',
+    'valid_action_count'
 ])
 
 def _as_float(x):
@@ -905,6 +906,8 @@ class TrainerNLQ(object):
         all_final_answer_precision = 0
         all_final_answer_f1 = 0
 
+        all_valid_action_count = np.zeros((self.path_length,))  # Average number of valid actions at each step across all episodes
+
         if self.use_stop_signal:
             all_stop_rate = 0.0
             all_correct_stop_rate = 0.0
@@ -1012,9 +1015,11 @@ class TrainerNLQ(object):
             ####################
 
             self.log_probs = np.zeros((temp_batch_size*effective_rollouts,)) * 1.0
-
+            self.valid_path_actions_count = np.zeros((temp_batch_size*effective_rollouts, self.path_length,))  # Average number of valid actions at each step across all episodes
             # For each hop/step
             for i in range(self.path_length):
+                valid_action_count = episode.count_valid_action(state['next_entities'], state['next_relations'])
+
                 # Update the feed_dict with the current info
                 feed_dict.update({
                     self.next_relations: state['next_relations'],
@@ -1078,6 +1083,9 @@ class TrainerNLQ(object):
                     for j in range(i):
                         self.entity_trajectory[j] = self.entity_trajectory[j][y]
                         self.relation_trajectory[j] = self.relation_trajectory[j][y]
+                    if i > 0:
+                        self.valid_path_actions_count[:, :i] = self.valid_path_actions_count[y, :i]
+                    valid_action_count = valid_action_count[y]
                 
                 self.entity_trajectory.append(state['current_entities'])
                 self.relation_trajectory.append(chosen_relation)
@@ -1089,6 +1097,8 @@ class TrainerNLQ(object):
 
                 # Aggregate Results
                 self.log_probs += test_scores[np.arange(self.log_probs.shape[0]), test_action_idx]
+
+                self.valid_path_actions_count[:, i] = valid_action_count 
             
             # After the last hop
             # If beam search was used, override the probabilities
@@ -1107,6 +1117,9 @@ class TrainerNLQ(object):
             ans_reshape = np.reshape(answer_hits, (temp_batch_size, effective_rollouts))  # [orig_batch, test_rollouts]
             self.log_probs = np.reshape(self.log_probs, (temp_batch_size, effective_rollouts))
             sorted_indx = np.argsort(-self.log_probs)
+
+            self.valid_path_actions_count = np.reshape(self.valid_path_actions_count, (temp_batch_size, effective_rollouts, self.path_length))
+            all_valid_action_count += self.valid_path_actions_count.mean(axis=1).sum(axis=0)  # Average valid action count at each step, averaged across rollouts and episodes
 
             precision, recall, f1_score = episode.get_multi_answer_coverage()
             all_final_answer_recall += recall.sum()
@@ -1333,6 +1346,8 @@ class TrainerNLQ(object):
         all_final_reward_20 /= total_examples
         mrr /= total_examples
 
+        all_valid_action_count /= total_examples  # Average valid action count at each step, averaged across all episodes
+
         all_final_special_step_rate /= total_examples
         all_final_restart_rate /= total_examples
         all_final_no_op_rate /= total_examples
@@ -1424,6 +1439,12 @@ class TrainerNLQ(object):
             score_file.write(f"\tHits@10: {all_final_reward_10:7.4f}\n")
             score_file.write(f"\tHits@20: {all_final_reward_20:7.4f}\n")
             score_file.write(f"\tMRR: {mrr:7.4f}\n")
+
+            score_file.write(f"Average Valid Action Count at Each Step\n")
+            for i, count in enumerate(all_valid_action_count):
+                score_file.write(f"\tStep {i+1}: {count:7.4f}\n")
+            score_file.write(f"\tOverall Average: {all_valid_action_count.mean():7.4f}\n")
+
             score_file.write(f"Reasoning Diagnostics (Top-Rollout)\n")
             score_file.write(f"\tSpecial Step Rate: {all_final_special_step_rate:7.4f}\n")
             score_file.write(f"\tRestart Rate: {all_final_restart_rate:7.4f}\n")
@@ -1491,6 +1512,10 @@ class TrainerNLQ(object):
         logger.info(f"\tHits@10: {all_final_reward_10:7.4f}")
         logger.info(f"\tHits@20: {all_final_reward_20:7.4f}")
         logger.info(f"\tMRR: {mrr:7.4f}")
+        logger.info("Average Valid Action Count at Each Step:")
+        for i, count in enumerate(all_valid_action_count):
+            logger.info(f"\tStep {i+1}: {count:7.4f}")
+        logger.info(f"\tOverall Average: {all_valid_action_count.mean():7.4f}")
         logger.info("Reasoning Diagnostics (Top-Rollout):")
         logger.info(f"\tSpecial Step Rate: {all_final_special_step_rate:7.4f}")
         logger.info(f"\tRestart Rate: {all_final_restart_rate:7.4f}")
@@ -1598,6 +1623,7 @@ class TrainerNLQ(object):
                     rel_precision=all_final_rel_precision,
                     rel_f1=all_final_rel_f1,
                     edit_distance=all_edit_distance,
+                    valid_action_count=all_valid_action_count.mean(),
                 )
             except Exception as e:
                 logger.error(f"Failed to log {mode} metrics to WANDB: {e}")
@@ -1650,7 +1676,9 @@ class TrainerNLQ(object):
             rel_precision=all_final_rel_precision,
             rel_f1=all_final_rel_f1,
             edit_distance=all_edit_distance,
+            valid_action_count=all_valid_action_count.mean(),
         )
+
 
     def predict(self, sess: tf.compat.v1.Session, beam: bool = False, mode: str = 'dev'):
         """
@@ -1834,6 +1862,7 @@ class TrainerNLQ(object):
             f"{mode}/answer/hits@20": float(vals["hits20"]),
             f"{mode}/answer/mrr": float(vals["mrr"]),
             f"{mode}/total_examples": int(total_examples),
+            f"{mode}/valid_action_count": float(vals["valid_action_count"]),
             f"{mode}/reasoning/special_step_rate": float(vals["special_step_rate"]),
             f"{mode}/reasoning/restart_rate": float(vals["restart_rate"]),
             f"{mode}/reasoning/no_op_rate": float(vals["no_op_rate"]),
