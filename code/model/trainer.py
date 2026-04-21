@@ -18,8 +18,7 @@ Key components:
 Classes:
     TrainerNLQ: Main trainer class for MINERVA NLQ reasoning
 """
-# TODO: Inspect best saving for checkpoints
-# TODO: Load the model in a separate file to check if everything is working fine
+# TODO: Calculate the per hop accuracy
 
 from __future__ import absolute_import
 from __future__ import division
@@ -47,6 +46,7 @@ from code.data.embedding_server import EmbeddingServer
 from code.model.baseline import ReactiveBaseline
 from code.model.agent import AgentNLQ
 from code.model.environment import EnvNLQ
+from code.model.metrics import entropy_from_log_probs
 from code.data.setup import set_seeds
 from code.options import read_options
 
@@ -70,7 +70,7 @@ EvaluationMetrics = namedtuple('EvaluationMetrics', [
     'restart_any_rate', 'post_restart_success_rate', 'restart_and_hit_rate',
     'restart_any_rate_rollout', 'post_restart_success_rate_rollout', 'restart_and_hit_rate_rollout',
     'mrr', 'max_hits_at_1', 'max_mrr',
-    'valid_action_count'
+    'valid_action_count', 'question_entropy', 'path_entropy'
 ])
 
 def _as_float(x):
@@ -901,12 +901,14 @@ class TrainerNLQ(object):
         all_final_unique_edges = 0
         all_final_redundancy = 0
         all_final_segment_hops = 0
-        
+
         all_final_answer_recall = 0
         all_final_answer_precision = 0
         all_final_answer_f1 = 0
 
-        all_valid_action_count = np.zeros((self.path_length,))  # Average number of valid actions at each step across all episodes
+        all_valid_action_count = np.zeros((self.path_length,)) * 1.0    # Average number of valid actions at each step across all episodes
+        all_final_question_entropy = 0 * 1.0                            # Average entropy of the question embedding across all episodes
+        all_final_path_entropy = np.zeros(self.path_length) * 1.0       # Average entropy of the action distribution at each step across all episodes
 
         if self.use_stop_signal:
             all_stop_rate = 0.0
@@ -1015,10 +1017,12 @@ class TrainerNLQ(object):
             ####################
 
             self.log_probs = np.zeros((temp_batch_size*effective_rollouts,)) * 1.0
-            self.valid_path_actions_count = np.zeros((temp_batch_size*effective_rollouts, self.path_length,))  # Average number of valid actions at each step across all episodes
+            self.valid_actions_count = np.zeros((temp_batch_size*effective_rollouts, self.path_length,)) * 1.0  # Average number of valid actions at each step across all episodes
+            self.entropies = np.zeros((temp_batch_size*effective_rollouts,self.path_length)) * 1.0
+
             # For each hop/step
             for i in range(self.path_length):
-                valid_action_count = episode.count_valid_action(state['next_entities'], state['next_relations'])
+                step_action_count = episode.count_valid_action(state['next_entities'], state['next_relations'])
 
                 # Update the feed_dict with the current info
                 feed_dict.update({
@@ -1035,6 +1039,8 @@ class TrainerNLQ(object):
                     [self.test_loss, self.test_state, self.test_logits, self.test_action_idx, self.chosen_relation],
                     feed_dict=feed_dict
                 )
+
+                step_entropies = entropy_from_log_probs(test_scores)
 
                 # Perform beam search
                 # If beam is on, this will override the agent's actions based on agent's logits scores
@@ -1084,8 +1090,10 @@ class TrainerNLQ(object):
                         self.entity_trajectory[j] = self.entity_trajectory[j][y]
                         self.relation_trajectory[j] = self.relation_trajectory[j][y]
                     if i > 0:
-                        self.valid_path_actions_count[:, :i] = self.valid_path_actions_count[y, :i]
-                    valid_action_count = valid_action_count[y]
+                        self.valid_actions_count[:, :i] = self.valid_actions_count[y, :i]
+                        self.entropies[:, :i] = self.entropies[y, :i]
+                    step_action_count = step_action_count[y]
+                    step_entropies = step_entropies[y]
                 
                 self.entity_trajectory.append(state['current_entities'])
                 self.relation_trajectory.append(chosen_relation)
@@ -1097,9 +1105,9 @@ class TrainerNLQ(object):
 
                 # Aggregate Results
                 self.log_probs += test_scores[np.arange(self.log_probs.shape[0]), test_action_idx]
+                self.valid_actions_count[:, i] = step_action_count 
+                self.entropies[:, i] = step_entropies
 
-                self.valid_path_actions_count[:, i] = valid_action_count 
-            
             # After the last hop
             # If beam search was used, override the probabilities
             if beam:
@@ -1118,8 +1126,12 @@ class TrainerNLQ(object):
             self.log_probs = np.reshape(self.log_probs, (temp_batch_size, effective_rollouts))
             sorted_indx = np.argsort(-self.log_probs)
 
-            self.valid_path_actions_count = np.reshape(self.valid_path_actions_count, (temp_batch_size, effective_rollouts, self.path_length))
-            all_valid_action_count += self.valid_path_actions_count.mean(axis=1).sum(axis=0)  # Average valid action count at each step, averaged across rollouts and episodes
+            self.valid_actions_count = np.reshape(self.valid_actions_count, (temp_batch_size, effective_rollouts, self.path_length))
+            all_valid_action_count += self.valid_actions_count.mean(axis=1).sum(axis=0) # Average per rollout, then sum across rollouts, to get total valid action count per step across all episodes
+
+            self.entropies = np.reshape(self.entropies, (temp_batch_size, effective_rollouts, self.path_length))
+            all_final_question_entropy += self.entropies.mean(axis=(1,2)).sum() # Average entropy per question across all beams and steps
+            all_final_path_entropy += self.entropies.mean(axis=1).sum(axis=0) # Average entropy per step across all questions and beams
 
             precision, recall, f1_score = episode.get_multi_answer_coverage()
             all_final_answer_recall += recall.sum()
@@ -1346,7 +1358,9 @@ class TrainerNLQ(object):
         all_final_reward_20 /= total_examples
         mrr /= total_examples
 
-        all_valid_action_count /= total_examples  # Average valid action count at each step, averaged across all episodes
+        all_valid_action_count /= total_examples
+        all_final_question_entropy /= total_examples
+        all_final_path_entropy /= total_examples
 
         all_final_special_step_rate /= total_examples
         all_final_restart_rate /= total_examples
@@ -1444,6 +1458,12 @@ class TrainerNLQ(object):
             for i, count in enumerate(all_valid_action_count):
                 score_file.write(f"\tStep {i+1}: {count:7.4f}\n")
             score_file.write(f"\tOverall Average: {all_valid_action_count.mean():7.4f}\n")
+            
+            score_file.write(f"Entropy Metrics\n")
+            score_file.write(f"\tQuestion Entropy: {all_final_question_entropy:7.4f}\n")
+            score_file.write(f"\tPath Entropy: {all_final_path_entropy.sum():7.4f}\n")
+            for step in range(self.path_length):
+                score_file.write(f"\tStep {step+1} Entropy: {all_final_path_entropy[step]:7.4f}\n")
 
             score_file.write(f"Reasoning Diagnostics (Top-Rollout)\n")
             score_file.write(f"\tSpecial Step Rate: {all_final_special_step_rate:7.4f}\n")
@@ -1512,10 +1532,18 @@ class TrainerNLQ(object):
         logger.info(f"\tHits@10: {all_final_reward_10:7.4f}")
         logger.info(f"\tHits@20: {all_final_reward_20:7.4f}")
         logger.info(f"\tMRR: {mrr:7.4f}")
+        
         logger.info("Average Valid Action Count at Each Step:")
         for i, count in enumerate(all_valid_action_count):
             logger.info(f"\tStep {i+1}: {count:7.4f}")
         logger.info(f"\tOverall Average: {all_valid_action_count.mean():7.4f}")
+
+        logger.info("Entropy Metrics:")
+        logger.info(f"\tQuestion Entropy: {all_final_question_entropy:7.4f}")
+        logger.info(f"\tPath Entropy: {all_final_path_entropy.sum():7.4f}")
+        for step in range(self.path_length):
+            logger.info(f"\tStep {step+1} Entropy: {all_final_path_entropy[step]:7.4f}")
+
         logger.info("Reasoning Diagnostics (Top-Rollout):")
         logger.info(f"\tSpecial Step Rate: {all_final_special_step_rate:7.4f}")
         logger.info(f"\tRestart Rate: {all_final_restart_rate:7.4f}")
@@ -1624,6 +1652,8 @@ class TrainerNLQ(object):
                     rel_f1=all_final_rel_f1,
                     edit_distance=all_edit_distance,
                     valid_action_count=all_valid_action_count.mean(),
+                    question_entropy=all_final_question_entropy,
+                    path_entropy=all_final_path_entropy.sum(),
                 )
             except Exception as e:
                 logger.error(f"Failed to log {mode} metrics to WANDB: {e}")
@@ -1677,6 +1707,8 @@ class TrainerNLQ(object):
             rel_f1=all_final_rel_f1,
             edit_distance=all_edit_distance,
             valid_action_count=all_valid_action_count.mean(),
+            question_entropy=all_final_question_entropy,
+            path_entropy=all_final_path_entropy.sum(),
         )
 
 
@@ -1728,6 +1760,7 @@ class TrainerNLQ(object):
             ####################
 
             self.log_probs = np.zeros((temp_batch_size*effective_rollouts,)) * 1.0
+            self.entropies = np.zeros((temp_batch_size*effective_rollouts, self.path_length)) * 1.0
 
             # For each hop/step
             for i in range(self.path_length):
@@ -1746,6 +1779,7 @@ class TrainerNLQ(object):
                     [self.test_loss, self.test_state, self.test_logits, self.test_action_idx, self.chosen_relation],
                     feed_dict=feed_dict
                 )
+                step_entropies = entropy_from_log_probs(test_scores)
 
                 # Perform beam search
                 # If beam is on, this will override the agent's actions based on agent's logits scores
@@ -1792,6 +1826,9 @@ class TrainerNLQ(object):
                     for j in range(i):
                         self.entity_trajectory[j] = self.entity_trajectory[j][y]
                         self.relation_trajectory[j] = self.relation_trajectory[j][y]
+                    if i > 0:
+                        self.entropies[:, :i] = self.entropies[y, :i]
+                    step_entropies = step_entropies[y]
                 
                 ####logger code####
                 # Store the current path before the environment update
@@ -1805,11 +1842,13 @@ class TrainerNLQ(object):
 
                 # Aggregate Results
                 self.log_probs += test_scores[np.arange(self.log_probs.shape[0]), test_action_idx]
+                self.entropies[:, i] = step_entropies
             
             # After the last hop
             # If beam search was used, override the probabilities
             if beam:
                 self.log_probs = beam_probs
+            self.path_entropies = np.sum(self.entropies, axis=1)
 
             ####Logger code####
             self.entity_trajectory.append(state['current_entities'])
@@ -1842,6 +1881,7 @@ class TrainerNLQ(object):
                 for step in range(self.path_length):
                     question_path += f" --[{relations_path[step]}]--> {entities_path[step+1]}"
                 paths[question_txt].append(f"Predicted Path:   {question_path}\n")
+                paths[question_txt].append(f"Path Entropy:     {self.path_entropies[indx]:.6f}\n")
                 paths[question_txt].append(f"Neg LogProb:      {(-self.log_probs[b, r]):.6f}\n")
                 paths[question_txt].append("\n" + "=" * 40 + "\n") # clear distinction for different attempts of same question
         
@@ -1862,7 +1902,9 @@ class TrainerNLQ(object):
             f"{mode}/answer/hits@20": float(vals["hits20"]),
             f"{mode}/answer/mrr": float(vals["mrr"]),
             f"{mode}/total_examples": int(total_examples),
-            f"{mode}/valid_action_count": float(vals["valid_action_count"]),
+            f"{mode}/action/valid_count": float(vals["valid_action_count"]),
+            f"{mode}/entropy/question": float(vals["question_entropy"]),
+            f"{mode}/entropy/path": float(vals["path_entropy"]),
             f"{mode}/reasoning/special_step_rate": float(vals["special_step_rate"]),
             f"{mode}/reasoning/restart_rate": float(vals["restart_rate"]),
             f"{mode}/reasoning/no_op_rate": float(vals["no_op_rate"]),
