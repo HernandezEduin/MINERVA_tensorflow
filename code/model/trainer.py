@@ -1263,10 +1263,10 @@ class TrainerNLQ(object):
                         end_e = self.environment.batcher.translate_entities([episode.end_entities[b * effective_rollouts]])[0]  # Map id to entity for answer node
                     
                     agent_hop = len(merged_path)
+                    gt_hop = episode.get_path_length(b)
 
                     # Check if gold path exists and retrieve it for comparison
                     if self.environment.has_paths():
-                        gt_hop = episode.get_path_length(b)
                         gt_path = episode.get_path(b)  # Get the gold path for this question
                         gt_entities = self.environment.batcher.translate_entities([step[0] for step in gt_path] + [gt_path[-1][2]])
                         gt_relations = self.environment.batcher.translate_relations([step[1] for step in gt_path])
@@ -1274,7 +1274,6 @@ class TrainerNLQ(object):
                         for ent, rel in zip(gt_entities[1:], gt_relations):
                             gt_path += f" --[{rel}]--> {ent}"
                     elif self.environment.has_path_keys():
-                        gt_hop = episode.get_path_length(b)
                         gt_path = episode.get_path_key(b)  # Get the gold path for this question
                         gt_relations = self.environment.batcher.translate_relations(gt_path)
                         gt_path = f"[{gt_relations[0]}]"
@@ -1313,7 +1312,7 @@ class TrainerNLQ(object):
                     paths[question_txt].append(f"Neg LogProb(↓):   {(-self.log_probs[b, r]):.6f}\n")
 
                     # Print Hop Count and Hit@1
-                    if self.environment.has_paths_or_keys(): paths[question_txt].append(f"Gold Hop Count:   {gt_hop}\n")
+                    paths[question_txt].append(f"Gold Hop Count:   {gt_hop}\n")
                     paths[question_txt].append(f"Agent Hop Count:  {agent_hop}\n")
                     paths[question_txt].append(f"Solved (Hit@1):   {bool(ans_reshape[b, r])}\n")
                     paths[question_txt].append("\n" + "=" * 40 + "\n") # clear distinction for different attempts of same question

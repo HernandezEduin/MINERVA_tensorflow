@@ -323,6 +323,7 @@ class QuestionBatcher:
             answers: Union[np.ndarray, List[List[int]]] = batch['Answer-Entity'].to_numpy(dtype=int) if not self.multi_answers else batch['Answer-Entity'].tolist()
             paths: List[List[List[str, str, str]]] = batch['Paths'].tolist() if self.path_exists else None
             path_keys: List[List[str]] = batch['Path-Key'].tolist() if self.path_key_exists else None
+            hops: List[int] = batch['Hops'].tolist()
             ques_ids: List[int] = batch['Question-Number'].tolist()
 
             # Extract questions based on the specified format
@@ -343,7 +344,7 @@ class QuestionBatcher:
                 questions: List[List[int]] = self.tokenize_questions([""] * len(batch)) 
                 question_embeddings = np.zeros((len(questions), self.get_embedding_dim()), dtype=np.float32)
 
-                yield questions, question_embeddings, source_ent, answers, paths, path_keys, ques_ids
+                yield questions, question_embeddings, source_ent, answers, paths, path_keys, hops, ques_ids
                 continue # skip embedding generation
 
             # Generate embeddings via the embedding server
@@ -354,7 +355,7 @@ class QuestionBatcher:
                 sep_id=self.sep_id,
                 max_length=128,
             )
-            yield questions, question_embeddings, source_ent, answers, paths, path_keys, ques_ids
+            yield questions, question_embeddings, source_ent, answers, paths, path_keys, hops, ques_ids
 
     def yield_next_batch_test(self) -> Generator[Tuple[List[str], Union[np.ndarray, List[List[int]]], np.ndarray, np.ndarray], None, None]:
         """
@@ -393,6 +394,7 @@ class QuestionBatcher:
             answers: Union[np.ndarray, List[List[int]]] = batch['Answer-Entity'].to_numpy(dtype=int) if not self.multi_answers else batch['Answer-Entity'].tolist()
             paths: List[List[List[str, str, str]]] = batch['Paths'].tolist() if self.path_exists else None
             path_keys: List[List[str]] = batch['Path-Key'].tolist() if self.path_key_exists else None
+            hops: List[int] = batch['Hops'].tolist()
             ques_ids: List[int] = batch['Question-Number'].tolist()
 
             # Extract questions based on the specified format
@@ -411,7 +413,7 @@ class QuestionBatcher:
                 questions: List[List[int]] = self.tokenize_questions([""] * len(batch)) 
                 question_embeddings = np.zeros((len(questions), self.get_embedding_dim()), dtype=np.float32)
 
-                yield questions, question_embeddings, source_ent, answers, paths, path_keys, ques_ids
+                yield questions, question_embeddings, source_ent, answers, paths, path_keys, hops, ques_ids
                 continue # skip embedding generation
 
             # Generate embeddings via the embedding server
@@ -423,7 +425,7 @@ class QuestionBatcher:
                 max_length=128,
             )
 
-            yield questions, question_embeddings, source_ent, answers, paths, path_keys, ques_ids
+            yield questions, question_embeddings, source_ent, answers, paths, path_keys, hops, ques_ids
 
     def translate_entities(self, entity_ids: np.ndarray, dynamic_list: bool = False) -> List[str]:
         """

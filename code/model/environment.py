@@ -99,6 +99,7 @@ class EpisodeNLQ(object):
         multi_answers: bool = False,
         paths: Optional[List[List[Tuple[int, int, int]]]] = None,
         path_keys: Optional[List[List[int]]] = None,
+        path_hops: Optional[List[int]] = None,
     ) -> None:
         """
         Initialize a reinforcement learning episode for knowledge graph reasoning.
@@ -126,7 +127,7 @@ class EpisodeNLQ(object):
                 of edges (head, relation, tail) using integer IDs.
             path_keys: Optional list of path keys (e.g., relation sequences) corresponding to paths,
                 for analysis/logging.
-
+            path_hops: Optional list of hop counts for each question in the batch.
         Note:
             - Internally repeats start_entities/question_embeddings for multiple rollouts.
             - For multi_answers=True, end_entities are converted to sets for fast membership tests.
@@ -141,6 +142,7 @@ class EpisodeNLQ(object):
         self.path_keys = path_keys
         self.paths_exists = paths is not None
         self.path_key_exists = path_keys is not None
+        self.path_hops = path_hops
         self.current_hop = 0
         self.no_examples = start_entities.shape[0]
         self.positive_reward = positive_reward
@@ -453,7 +455,9 @@ class EpisodeNLQ(object):
         Returns:
             The number of edges in the ground-truth path for the question; or 0 if paths are not available.
         """
-        if self.paths_exists:
+        if self.path_hops is not None:
+            return self.path_hops[idx]
+        elif self.paths_exists:
             return len(self.paths[idx])
         elif self.path_key_exists:
             return len(self.path_keys[idx])
@@ -472,6 +476,18 @@ class EpisodeNLQ(object):
         else:
             return None
     
+    def get_hop_count(self, idx: int) -> Optional[int]:
+        """
+        Get the hop count for a given question index.
+
+        Returns:
+            The hop count for the question; or None if hop counts are not available.
+        """
+        if self.path_hops is not None:
+            return self.path_hops[idx]
+        else:
+            return None
+
     # 6-b) Edge / relation helpers
     def canon_edge(self, h: int, r: int, t: int) -> Tuple[int, int, int]:
         """
@@ -1063,7 +1079,7 @@ class EnvNLQ(object):
         """
         if self.mode == 'train':
             for data in self.batcher.yield_next_batch_train():
-                question_tokens, question_embeddings, start_entities, end_entities, _, _, _ = data
+                question_tokens, question_embeddings, start_entities, end_entities, _, _, _, _ = data # paths, path_keys, and hops should not be used during training, so we ignore them here
                 yield EpisodeNLQ(
                     self.grapher, 
                     question_tokens,
@@ -1079,12 +1095,13 @@ class EnvNLQ(object):
                     multi_answers=self.multi_answers,
                     paths=None,
                     path_keys=None,
+                    path_hops=None,
                 )
         else:
             for data in self.batcher.yield_next_batch_test():
                 if data == None:
                     return
-                question_tokens, question_embeddings, start_entities, end_entities, paths, path_keys, ques_ids = data
+                question_tokens, question_embeddings, start_entities, end_entities, paths, path_keys, hops, ques_ids = data
                 yield EpisodeNLQ(
                     self.grapher, 
                     question_tokens,
@@ -1100,6 +1117,7 @@ class EnvNLQ(object):
                     multi_answers=self.multi_answers,
                     paths=paths,
                     path_keys=path_keys,
+                    path_hops=hops,
                 )
 
     def change_mode(self, mode: str) -> None:

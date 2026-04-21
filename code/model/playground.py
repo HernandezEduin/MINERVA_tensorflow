@@ -64,18 +64,14 @@ if __name__ == "__main__":
 
     counter = 0
     for data in next_batch_func():
-        questions, q_embeddings, source_ent, ans_ent, paths, path_keys, ques_ids = data
+        questions, q_embeddings, source_ent, ans_ent, paths, path_keys, hops, ques_ids = data
 
         question_text = batcher.translate_questions(questions)
         ent_names = batcher.translate_entities(source_ent)
         ans_ent_name = batcher.translate_entities(ans_ent, dynamic_list=is_multi_answer)
 
         for i0 in range(source_ent.shape[0]):
-            hop_info = ""
-            if has_paths:
-                hop_info = f" ({len(paths[i0])}-hop)"
-            elif has_path_keys:
-                hop_info = f" ({len(path_keys[i0])}-hop)"
+            hop_info = f" ({hops[i0]}-hop)"
 
             print(f"Batch Questions (ID {ques_ids[i0]}){hop_info}: {question_text[i0]}, Source Entity: {ent_names[i0]}, Answer Entity: {ans_ent_name[i0]}")
 
