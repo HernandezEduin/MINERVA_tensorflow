@@ -1315,6 +1315,7 @@ class TrainerNLQ(object):
                         paths[question_txt].append(f"Path F1 Score(↑): {path_f1:.4f}\n")
                         paths[question_txt].append(f"Edit Distance(↓): {ed_dist:.4f}\n")
                     paths[question_txt].append(f"Neg LogProb(↓):   {(-self.log_probs[b, r]):.6f}\n")
+                    paths[question_txt].append(f"Path Entropy(↓):     {self.entropies[b,r].sum():.6f}\n")
 
                     # Print Hop Count and Hit@1
                     paths[question_txt].append(f"Gold Hop Count:   {gt_hop}\n")
