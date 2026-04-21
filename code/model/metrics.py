@@ -2,7 +2,7 @@ import numpy as np
 
 from collections import namedtuple
 
-from typing import List
+from typing import Any, List, Set, Tuple, Dict, Optional
 
 EvaluationMetrics = namedtuple('EvaluationMetrics', [
     'hits_at_1', 'hits_at_3', 'hits_at_5', 'hits_at_10', 'hits_at_20', 
@@ -90,3 +90,27 @@ def edit_distance(seq1: List[int], seq2: List[int]) -> int:
                     dp[i0 - 1][j0 - 1] + 1 # Substitution
                 )
     return dp[m][n], m, n
+
+def compute_precision_recall_f1(pred: Set[Any], gt: Set[Any]) -> Tuple[float, float, float]:
+    """
+    Compute precision, recall, and F1 score between two sets of items.
+    Precision is the fraction of predicted items that are correct (in the ground truth).
+    Recall is the fraction of ground truth items that are correctly predicted.
+    F1 score is the harmonic mean of precision and recall.
+
+    Args:
+        pred: Set of predicted items.
+        gt: Set of ground truth items.
+    Returns:
+        precision: Precision score.
+        recall: Recall score.
+        f1_score: F1 score.
+    """
+    tp = len(pred & gt)
+    fp = len(pred - gt)
+    fn = len(gt - pred)
+
+    precision = tp / (tp + fp + 1e-8)
+    recall = tp / (tp + fn + 1e-8)
+    f1_score = 2 * precision * recall / (precision + recall + 1e-8)
+    return precision, recall, f1_score

@@ -35,7 +35,7 @@ import numpy as np
 from code.data.embedding_server import EmbeddingServer
 from code.data.feed_data import QuestionBatcher
 from code.data.grapher import RelationEntityGrapher
-from code.model.metrics import edit_distance
+from code.model.metrics import edit_distance, compute_precision_recall_f1
 
 from typing import Any, Dict, Generator, List, Optional, Set, Union, Tuple, Literal, Sequence
 
@@ -645,11 +645,7 @@ class EpisodeNLQ(object):
                 current_answers = set(rollout_ends)          # unique predicted endpoints
                 correct_answers = self.end_entities[i0]      # set of gold endpoints
 
-                tp = len(current_answers & correct_answers)
-
-                recall[i0] = tp / (len(correct_answers) + 1e-8)  # unique answer coverage (recall)
-                precision[i0] = tp / (len(current_answers) + 1e-8)
-                f1_score[i0] = 2 * tp / (len(current_answers) + len(correct_answers) + 1e-8)
+                precision[i0], recall[i0], f1_score[i0] = compute_precision_recall_f1(current_answers, correct_answers)
         else:
             for i0 in range(self.no_examples):
                 rollout_ends = self.current_entities[i0*self.num_rollouts:(i0+1)*self.num_rollouts]
@@ -695,13 +691,7 @@ class EpisodeNLQ(object):
         )
         gt_edges = set((h, r, t) for h, r, t in gt_path)
 
-        tp = len(pred_edges & gt_edges)
-        fp = len(pred_edges - gt_edges)
-        fn = len(gt_edges - pred_edges)
-        precision = tp / (tp + fp + 1e-8)
-        recall = tp / (tp + fn + 1e-8)
-        f1_score = 2 * precision * recall / (precision + recall + 1e-8)
-        return precision, recall, f1_score
+        return compute_precision_recall_f1(pred_edges, gt_edges)
 
     def get_path_edit_distance(self, pred_path: List[List[int]], idx: int) -> float:
         """
@@ -784,13 +774,7 @@ class EpisodeNLQ(object):
         pred_nodes = set(pred_entities)
         gt_nodes = set(t for _, _, t in gt_path) | set(h for h, _, _ in gt_path)  # include start entity from gt path
 
-        tp = len(pred_nodes & gt_nodes)
-        fp = len(pred_nodes - gt_nodes)
-        fn = len(gt_nodes - pred_nodes)
-        precision = tp / (tp + fp + 1e-8)
-        recall = tp / (tp + fn + 1e-8)
-        f1_score = 2 * precision * recall / (precision + recall + 1e-8)
-        return precision, recall, f1_score
+        return compute_precision_recall_f1(pred_nodes, gt_nodes)
 
     def get_relation_coverage(self, pred_relations: List[int], idx: int) -> Tuple[float, float, float]:
         """
@@ -818,13 +802,7 @@ class EpisodeNLQ(object):
         )
         gt_rels = set(r for _, r, _ in gt_path) if self.paths_exists else set(gt_path)  # if using path keys, gt_path is already a list of relations
 
-        tp = len(pred_rels & gt_rels)
-        fp = len(pred_rels - gt_rels)
-        fn = len(gt_rels - pred_rels)
-        precision = tp / (tp + fp + 1e-8)
-        recall = tp / (tp + fn + 1e-8)
-        f1_score = 2 * precision * recall / (precision + recall + 1e-8)
-        return precision, recall, f1_score
+        return compute_precision_recall_f1(pred_rels, gt_rels)
 
     # 7-d) High-level analysis
     def get_reasoning_diagnostic(self, pred_path: List[List[int]]) -> Tuple[float, float, float, float, float, float, float]:
