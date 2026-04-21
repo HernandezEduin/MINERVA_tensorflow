@@ -1134,7 +1134,7 @@ class TrainerNLQ(object):
                 all_correct_stop_rate += correct_stop_rate  * temp_batch_size
                 all_incorrect_stop_rate += incorrect_stop_rate  * temp_batch_size
                 all_hit_wo_stop_rate += hit_without_stop_rate  * temp_batch_size
-                all_final_termination_rollouts = termination_step.mean() * temp_batch_size
+                all_final_termination_rollouts += termination_step.mean() * temp_batch_size
             
             if self.use_restart_signal:
                 restart_any_rate, post_restart_success_rate, restart_and_hit_rate = episode.get_restart_quality(answer_hits)
@@ -1684,7 +1684,7 @@ class TrainerNLQ(object):
                     rel_recall=all_final_rel_recall,
                     rel_precision=all_final_rel_precision,
                     rel_f1=all_final_rel_f1,
-                    edit_distance=overall_rel_edit_distance,
+                    edit_distance=overall_edit_distance,
                     edit_distance_by_hop=all_edit_distance,
                     valid_action_count=all_valid_action_count.mean(),
                     question_entropy=all_final_question_entropy,
@@ -2001,11 +2001,13 @@ class TrainerNLQ(object):
             f"{mode}/reasoning/restart_and_hit_rate": _as_float(vals.get("restart_and_hit_rate")),
         }
 
-        for i0 in vals.get("edit_distance_by_hop", {}):
-            optional[f"{mode}/evidence/edit_distance/path/{i0}hop"] = _as_float(vals["edit_distance_by_hop"][i0])
+        if vals.get("edit_distance_by_hop") is not None:
+            for i0 in vals.get("edit_distance_by_hop", {}): 
+                optional[f"{mode}/evidence/edit_distance/path/{i0}hop"] = _as_float(vals["edit_distance_by_hop"][i0])
         
-        for i0 in vals.get("rel_edit_distance_by_hop", {}):
-            optional[f"{mode}/evidence/edit_distance/relation/{i0}hop"] = _as_float(vals["rel_edit_distance_by_hop"][i0])
+        if vals.get("rel_edit_distance_by_hop") is not None:
+            for i0 in vals.get("rel_edit_distance_by_hop", {}):
+                optional[f"{mode}/evidence/edit_distance/relation/{i0}hop"] = _as_float(vals["rel_edit_distance_by_hop"][i0])
 
         wandb.log({**base, **_drop_none(optional)})
 
