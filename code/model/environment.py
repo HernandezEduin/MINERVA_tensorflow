@@ -695,18 +695,17 @@ class EpisodeNLQ(object):
 
     def get_path_edit_distance(self, pred_path: List[List[int]], idx: int) -> float:
         """
-        Compute normalized edit distance between predicted and ground-truth paths.
+        Compute edit distance between predicted and ground-truth paths.
 
         Edit distance is computed via dynamic programming over the edge sequences after filtering
-        special tokens (NO_OP/STOP/RESTART). The returned value is normalized by max(m, n), so it
-        lies in [0, 1], where 0 indicates an exact match.
+        special tokens (NO_OP/STOP/RESTART).
 
         Args:
             pred_path: Sequence of edges (h, r, t) using integer IDs (may include special tokens).
             idx: Question index into the ground-truth path list.
 
         Returns:
-            normalized_edit_distance (float): Edit distance / max(len(pred), len(gt)) in [0, 1].
+            edit_distance (float): Edit distance between predicted and ground-truth path sequences.
 
         Note:
             - Stricter than set-based overlap because order matters.
@@ -720,22 +719,21 @@ class EpisodeNLQ(object):
         gt_path = [(h, r, t) for h, r, t in gt_path]
 
         ed_dist, m, n = edit_distance(pred_path, gt_path)
-        return ed_dist/(max(m, n) + 1e-8)  # normalize by path length to get a score between 0 and 1
+        return ed_dist
 
     def get_relation_edit_distance(self, pred_rels: List[List[int]], idx: int) -> float:
         """
-        Compute normalized edit distance between predicted and ground-truth relation sequences.
+        Compute edit distance between predicted and ground-truth relation sequences.
 
         Edit distance is computed via dynamic programming over the edge sequences after filtering
-        special tokens (NO_OP/STOP/RESTART). The returned value is normalized by max(m, n), so it
-        lies in [0, 1], where 0 indicates an exact match.
+        special tokens (NO_OP/STOP/RESTART).
 
         Args:
             pred_rels: List of predicted relation IDs.
             idx: Question index into the ground-truth path list.
 
         Returns:
-            normalized_edit_distance (float): Edit distance / max(len(pred), len(gt)) in [0, 1].
+            edit_distance (float): Edit distance between predicted and ground-truth relation sequences.
 
         Note:
             - Stricter than set-based overlap because order matters.
@@ -749,7 +747,7 @@ class EpisodeNLQ(object):
         gt_rels = [r for _, r, _ in gt_path] if self.paths_exists else gt_path
 
         ed_dist, m, n = edit_distance(pred_rels, gt_rels)
-        return ed_dist/(max(m, n) + 1e-8)  # normalize by path length to get a score between 0 and 1
+        return ed_dist
 
     # 7-c) Coverage metrics
     def get_node_coverage(self, pred_entities: List[int], idx: int) -> Tuple[float, float, float]:

@@ -1271,9 +1271,10 @@ class TrainerNLQ(object):
                     all_final_rel_precision += precision
                     all_final_rel_recall += recall
                     all_final_rel_f1 += f1_score
+                    rel_f1 = f1_score
 
-                    ed_dist = episode.get_relation_edit_distance(relations_path, b)
-                    all_rel_edit_distance[gt_hop] += ed_dist
+                    ed_rel_dist = episode.get_relation_edit_distance(relations_path, b)
+                    all_rel_edit_distance[gt_hop] += ed_rel_dist
                 
                 # Comprehensive reasoning path report
                 if print_paths:
@@ -1331,6 +1332,9 @@ class TrainerNLQ(object):
                     if self.environment.has_paths(): 
                         paths[question_txt].append(f"Path F1 Score(↑): {path_f1:.4f}\n")
                         paths[question_txt].append(f"Edit Distance(↓): {ed_dist:.4f}\n")
+                    if self.environment.has_paths_or_keys():
+                        paths[question_txt].append(f"Rel F1 Score(↑):  {rel_f1:.4f}\n")
+                        paths[question_txt].append(f"Rel Edit Dist(↓): {ed_rel_dist:.4f}\n")
                     paths[question_txt].append(f"Neg LogProb(↓):   {(-self.log_probs[b, r]):.6f}\n")
                     paths[question_txt].append(f"Path Entropy(↓):  {self.entropies[b,r].sum():.6f}\n")
 

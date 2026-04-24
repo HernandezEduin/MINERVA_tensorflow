@@ -130,13 +130,14 @@ If your dataset provides reference reasoning paths, the framework reports faithf
 - **GT-Edge Overlap (Recall/Precision/F1)**: Treats each path as a **set of directed triplets** (i.e., a small subgraph) and computes overlap with the GT triplet set. This makes the comparison **permutation-invariant** and supports **subgraph-style** evaluation (edge-set match rather than strict step order).
 - **Node-Set Overlap (Recall/Precision/F1)**: Overlap between the **sets of visited entities** in the predicted vs. GT path (order-invariant).
 - **Relation-Set Overlap (Recall/Precision/F1)**: Overlap between the **sets of relations** used in the predicted vs. GT path (order-invariant).
-- **Path Edit Distance (Normalized)**: For *sequence-level* evaluation, we compute the **normalized path edit distance** between the cleaned predicted path and the GT path (lower is better), capturing ordering and structural deviations that edge-set metrics ignore. 
+- **Path Edit Distance**: For *sequence-level* evaluation, we compute the **path edit distance** between the cleaned predicted path and the GT path (lower is better), capturing ordering and structural deviations that edge-set metrics ignore. 
+- **Relation Edit Distance**: For *relation-sequence* evaluation, we compute the **relation edit distance** between the cleaned predicted relations and the GT relations (lower is better).
 
 ### 5) Path Logs (Qualitative Debugging)
 Optional per-question traces are written for inspection (see `test_path.txt`-style output). Each entry includes:
 - **Question / Start Entity / Gold Answer / Predicted Answer**
 - **Gold Path vs. Predicted Path** (human-readable), plus the **raw rollout trajectory** with special actions explicitly shown (e.g., **NO-OP**, **RESTART**, **STOP**)
-- **Per-example diagnostics** including **Path F1 (↑)**, **Normalized Edit Distance (↓)**, **Negative Log-Probability (↓)**, **Gold vs. Agent hop counts**, and whether the example is solved (**Hit@1**)
+- **Per-example diagnostics** including **Path F1 (↑)**, **Edit Distance (↓)**, **Negative Log-Probability (↓)**, **Gold vs. Agent hop counts**, and whether the example is solved (**Hit@1**)
 
 ## Code Structure
 
