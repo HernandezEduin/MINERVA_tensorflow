@@ -1,0 +1,37 @@
+# best configurations for QA hops 2, 3, 4
+
+base_output_dir: "output/kinship/"
+batch_size: 16
+test_batch_size: 64
+beta: 0.27
+data_input_dir: "datasets/nlq/kinship/"
+embedding_size: 6
+eval_every: 100
+gamma: 1.00
+hidden_size: 100
+Lambda: 0.0017628132236469198
+learning_rate: 0.0007
+max_num_actions: 100
+num_rollouts: 30
+test_rollouts: 100
+total_iterations: 10000
+train_entity_embeddings: True
+train_relation_embeddings: True
+print_predictions: False
+question_tokenizer_name: "bert-base-uncased"
+use_beam: True
+use_entity_embeddings: False
+vocab_dir: "${data_input_dir}vocab"
+
+# Recommended variables to tune
+seed: 0
+use_full_graph: True
+use_directed_graph: True
+path_length: 3
+question_format: "full_text"
+evaluate_paraphrases: True
+raw_QAData_path: "${data_input_dir}/kinship_qa_nhop.csv"
+cached_QAMetaData_path: "./.cache/itl/kinship_qa_nhop.json"
+print_paths: True
+load_model: True
+model_load_dir: "${base_output_dir}qa_nhop_reason_${path_length}hop_seed${seed}/model/model.ckpt"
