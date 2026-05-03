@@ -1,9 +1,18 @@
-Academic Use Only License
+Review-Only License
 
-Copyright (c) 2025 HalcyonSoutions
+Copyright (c) 2025 Anonymous Authors
 
-Permission is granted for academic, non-commercial research and educational use only. 
-Any commercial use, including but not limited to use in proprietary software, 
-consulting, or for-profit applications, is strictly prohibited.
+This repository, including its source code, pretrained checkpoints, and
+accompanying datasets, is provided solely for use in the double-blind review
+process associated with an anonymous academic submission.
 
-For commercial licensing, please contact admin@halcyon-tech.org
+Permission is granted to reviewers and authorized evaluators to use, inspect,
+and run this material only for the purpose of evaluating the submission during
+the review process.
+
+Redistribution, reposting, mirroring, sublicensing, public release, commercial
+use, and use outside the review process are strictly prohibited without prior
+written permission from the rights holders.
+
+After the review process concludes, a separate public release may be provided
+under different terms.
