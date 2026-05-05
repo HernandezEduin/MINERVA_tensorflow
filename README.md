@@ -1,5 +1,5 @@
 # KGQA Adapted MINERVA
-Meandering In Networks of Entities to Reach Verisimilar Answers *for Knowledge Graph Question Answering* (KGQA)
+This is the repository for the paper *Theseus in the Graph: Towards Traceable Multi-Hop Graph Navigation* for the adapted MINERVA model on Knowledge Graph Question Answering (KGQA).
 
 This repository is an anonymized evaluation-only release for the double-blind review process. It contains the code and configs. The preprocessed datasets and pretrained checkpoints are available at [Kaggle](https://www.kaggle.com/models/anonymousexpert/minerva-kgqa).
 
@@ -25,35 +25,39 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 ```
 
 ## Kaggle Datasets and Checkpoints
-The kaggle datasets and checkpoints are organized as follows:
+The Kaggle release is organized into cached metadata, preprocessed datasets, and pretrained checkpoints:
 
 ```
 .cache/
   itl/
-    <dataset>_qa_nhop.json
-    <dataset>_qa_nhop_Split-<split>_date-<date>.parquet
+    <dataset>_qa_nhop.json                              # cached QA metadata
+    <dataset>_qa_nhop_Split-<split>_date-<date>.parquet # cached split files
+
 datasets/
   nlq/
     <dataset>/
       vocab/
-        entity_title.json
-        entity_vocab.json
-        relation_title.json
-        relation_vocab.json
-      <dataset>_qa_nhop.csv
-      full_graph.txt
-      node_data.csv
-      relation_data.csv
-      triplets.txt
+        entity_title.json                                # entity ID -> semantic label
+        entity_vocab.json                                # entity ID -> Machine ID
+        relation_title.json                              # relation ID -> semantic label
+        relation_vocab.json                              # relation ID -> Machine ID
+      <dataset>_qa_nhop.csv                              # question-answer pairs
+      full_graph.txt                                     # evaluation graph
+      node_data.csv                                      # node metadata
+      relation_data.csv                                  # relation metadata
+      triplets.txt                                       # KG triplets
+
 checkpoints/
-  dataset/
-    <dataset>_qa_nhop_reason_<path_length>hop_seed<seed>/
+  <dataset>/
+    <run_name>/                                          # e.g. <dataset>_qa_nhop_reason_<path_length>hop_seed<seed>
       model/
         model.ckpt
-      test_beams
-        test_paths.txt
-      scores.txt
+      test_beam/
+        test_paths.txt                                   # predicted label paths for test set
+      scores.txt                                         # evaluation scores for test set
 ```
+
+Here, `<dataset>` is the dataset name, `<split>` is typically `train`, `dev`, or `test`, and `<run_name>` identifies a specific released checkpoint.
 
 ## Evaluation Configs
 
@@ -75,7 +79,7 @@ Run evaluation on CPU:
 bash run_eval.sh configs/<dataset>/evaluation.yaml
 ```
 
-Run evaluation on a specific GPU:
+Run evaluation on a specific GPU (not ideal for large data like MetaQA):
 
 ```bash
 bash run_eval.sh configs/<dataset>/evaluation.yaml 0
