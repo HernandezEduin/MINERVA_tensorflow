@@ -1,7 +1,7 @@
 # KGQA Adapted MINERVA
-Meandering In Networks of Entities to Reach Verisimilar Answers *for Knowledge Graph Question Answering*
+Meandering In Networks of Entities to Reach Verisimilar Answers *for Knowledge Graph Question Answering* (KGQA)
 
-This repository is an anonymized evaluation-only release for the double-blind review process. It contains the code, configs, preprocessed data, and pretrained checkpoints needed to evaluate the provided models.
+This repository is an anonymized evaluation-only release for the double-blind review process. It contains the code and configs. The preprocessed datasets and pretrained checkpoints are available at [Kaggle](https://www.kaggle.com/models/anonymousexpert/minerva-kgqa).
 
 ## Review Notice
 
@@ -22,6 +22,37 @@ If you plan to run evaluation on GPU, install the following in your conda enviro
 ```bash
 conda install -c conda-forge cudatoolkit=11.2 cudnn=8.1.0 -y
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
+```
+
+## Kaggle Datasets and Checkpoints
+The kaggle datasets and checkpoints are organized as follows:
+
+```
+.cache/
+  itl/
+    <dataset>_qa_nhop.json
+    <dataset>_qa_nhop_Split-<split>_date-<date>.parquet
+datasets/
+  nlq/
+    <dataset>/
+      vocab/
+        entity_title.json
+        entity_vocab.json
+        relation_title.json
+        relation_vocab.json
+      <dataset>_qa_nhop.csv
+      full_graph.txt
+      node_data.csv
+      relation_data.csv
+      triplets.txt
+checkpoints/
+  dataset/
+    <dataset>_qa_nhop_reason_<path_length>hop_seed<seed>/
+      model/
+        model.ckpt
+      test_beams
+        test_paths.txt
+      scores.txt
 ```
 
 ## Evaluation Configs
