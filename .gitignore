@@ -6,4 +6,5 @@
 /output/*
 .cache/*
 /saved_models/*
+/checkpoints/*
 /wandb/*

@@ -1,6 +1,6 @@
 # best configurations for QA hops 2, 3, 4
 
-base_output_dir: "output/metaqa/"
+base_output_dir: "checkpoints/metaqa/"
 batch_size: 128
 test_batch_size: 256
 beta: 0.05

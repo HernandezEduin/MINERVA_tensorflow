@@ -1,6 +1,6 @@
 # best configurations for QA hops 2, 3, 4
 
-base_output_dir: "output/kinship/"
+base_output_dir: "checkpoints/kinshiphinton/"
 batch_size: 16
 test_batch_size: 64
 beta: 0.27
@@ -29,7 +29,7 @@ use_full_graph: True
 use_directed_graph: True
 path_length: 3
 question_format: "full_text"
-evaluate_paraphrases: True
+evaluate_paraphrases: False
 raw_QAData_path: "${data_input_dir}/kinship_qa_nhop.csv"
 cached_QAMetaData_path: "./.cache/itl/kinship_qa_nhop.json"
 print_paths: True

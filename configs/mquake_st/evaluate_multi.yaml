@@ -1,6 +1,6 @@
 # best configurations for QA hops 2, 3, 4
 
-base_output_dir: "output/mquake_st/"
+base_output_dir: "checkpoints/mquake_st/"
 batch_size: 32
 test_batch_size: 128
 beta: 0.05
