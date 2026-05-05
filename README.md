@@ -65,7 +65,7 @@ Evaluation configs for the released models follow the pattern `configs/<dataset>
 
 Use the released evaluation config for the dataset you want to evaluate.
 
-For the full experimental setup, we trained three models per dataset and report averaged results across seeds. For the double-blind review release, we provide only the `seed0` checkpoint for each dataset.
+For the full experimental setup, we trained three models per dataset and report averaged results across seeds. For the double-blind review release, we provide three checkpoint for each dataset, using seeds `0`, `42`, and `100`. By default, the evaluation configs point to the checkpoint with seed `0`. To evaluate the other checkpoints, update the `seed` field in the config to point to the desired checkpoint.
 
 If your local checkpoint path differs from the default one in a config, update:
 1. `load_model: True`
