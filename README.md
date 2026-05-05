@@ -11,10 +11,19 @@ Please do **not** redistribute, repost, mirror, or publicly release any part of 
 
 ## Environment Setup
 
-Use **Python 3.9** and install the required dependencies:
+Create and activate a fresh conda environment with **Python 3.9**:
 
 ```bash
+conda create -n minerva python=3.9 pip -y
+conda activate minerva
 pip install -r requirements.txt
+```
+
+Optionally, you can create the conda environment directly from environment.yml:
+
+```bash
+conda env create -f environment.yml
+conda activate minerva
 ```
 
 If you plan to run evaluation on GPU, install the following in your conda environment:
@@ -61,28 +70,30 @@ Here, `<dataset>` is the dataset name, `<split>` is typically `train`, `dev`, or
 
 ## Evaluation Configs
 
-Evaluation configs for the released models follow the pattern `configs/<dataset>/evaluation.yaml`, where `<dataset>` is a placeholder for the dataset name.
+Evaluation configs for the released models follow the pattern `configs/<dataset>/evaluate.yaml`, where `<dataset>` is a placeholder for the dataset name.
 
 Use the released evaluation config for the dataset you want to evaluate.
 
-For the full experimental setup, we trained three models per dataset and report averaged results across seeds. For the double-blind review release, we provide three checkpoint for each dataset, using seeds `0`, `42`, and `100`. By default, the evaluation configs point to the checkpoint with seed `0`. To evaluate the other checkpoints, update the `seed` field in the config to point to the desired checkpoint.
+For the full experimental setup, we trained three models per dataset and report averaged results across seeds. For the double-blind review release, we provide three checkpoints for each dataset, using seeds `0`, `42`, and `100`. By default, the evaluation configs point to the checkpoint with seed `0`. To evaluate the other checkpoints, update the `seed` field in the config to point to the desired checkpoint.
 
 If your local checkpoint path differs from the default one in a config, update:
 1. `load_model: True`
 2. `model_load_dir: <path-to-checkpoint>`
+
+The released evaluation configs have `track: False`, so `wandb` login is not required for the default evaluation workflow.
 
 ## Evaluate
 
 Run evaluation on CPU:
 
 ```bash
-bash run_eval.sh configs/<dataset>/evaluation.yaml
+bash run_eval.sh configs/<dataset>/evaluate.yaml
 ```
 
 Run evaluation on a specific GPU (not ideal for large data like MetaQA):
 
 ```bash
-bash run_eval.sh configs/<dataset>/evaluation.yaml 0
+bash run_eval.sh configs/<dataset>/evaluate.yaml 0
 ```
 
 Evaluation outputs are written by the evaluation pipeline according to the selected config.
