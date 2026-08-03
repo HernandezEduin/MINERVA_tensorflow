@@ -936,24 +936,39 @@ class TrainerNLQ(object):
             all_post_restart_success_rate_top_rollout = None
             all_restart_and_hit_rate_top_rollout = None
 
-        if self.environment.has_paths():
+        use_test_semantic_multi_path_eval = (
+            mode == 'test'
+            and self.environment.has_multi_answers()
+            and self.environment.has_path_keys()
+            and not self.environment.has_paths()
+        )
+        path_metrics_enabled = self.environment.has_paths() or use_test_semantic_multi_path_eval
+
+        if path_metrics_enabled:
             all_final_path_recall = 0
             all_final_path_precision = 0
             all_final_path_f1 = 0
-            all_final_node_recall = 0
-            all_final_node_precision = 0
-            all_final_node_f1 = 0
             all_edit_distance = defaultdict(float)
+            all_path_hop_count = defaultdict(int)
+            all_path_metric_examples = 0
             overall_edit_distance = 0
         else:
             all_final_path_recall = None
             all_final_path_precision = None
             all_final_path_f1 = None
+            all_edit_distance = None
+            all_path_hop_count = None
+            all_path_metric_examples = 0
+            overall_edit_distance = None
+
+        if self.environment.has_paths():
+            all_final_node_recall = 0
+            all_final_node_precision = 0
+            all_final_node_f1 = 0
+        else:
             all_final_node_recall = None
             all_final_node_precision = None
             all_final_node_f1 = None
-            all_edit_distance = None
-            overall_edit_distance = None
         
         if self.environment.has_paths_or_keys():
             all_final_rel_recall = 0
@@ -1265,6 +1280,23 @@ class TrainerNLQ(object):
 
                     ed_dist = episode.get_path_edit_distance(merged_path, b)
                     all_edit_distance[gt_hop] += ed_dist
+                    all_path_hop_count[gt_hop] += 1
+                    all_path_metric_examples += 1
+                elif use_test_semantic_multi_path_eval:
+                    # Test-only multi-answer PED/F1_SG against all semantically valid
+                    # entity-level paths generated from the Path-Key relation chain.
+                    overlap_scores = episode.get_multi_answer_subgraph_overlap(merged_path, b)
+                    ed_dist = episode.get_multi_answer_path_edit_distance(merged_path, b)
+                    if overlap_scores is not None and ed_dist is not None:
+                        precision, recall, f1_score = overlap_scores
+                        all_final_path_precision += precision
+                        all_final_path_recall += recall
+                        all_final_path_f1 += f1_score
+                        path_f1 = f1_score
+
+                        all_edit_distance[gt_hop] += ed_dist
+                        all_path_hop_count[gt_hop] += 1
+                        all_path_metric_examples += 1
                 
                 if self.environment.has_paths_or_keys():   # If relation path existence checking is enabled
                     precision, recall, f1_score = episode.get_relation_coverage(relations_path, b)
@@ -1405,18 +1437,29 @@ class TrainerNLQ(object):
             all_restart_any_rate_top_rollout /= total_examples
             all_restart_and_hit_rate_top_rollout /= total_examples
 
-        if self.environment.has_paths():
-            all_final_path_recall /= total_examples
-            all_final_path_precision /= total_examples
-            all_final_path_f1 /= total_examples
+        if path_metrics_enabled:
+            if all_path_metric_examples > 0:
+                all_final_path_recall /= all_path_metric_examples
+                all_final_path_precision /= all_path_metric_examples
+                all_final_path_f1 /= all_path_metric_examples
 
+                overall_edit_distance = sum(all_edit_distance.values()) / sum(all_path_hop_count.values())
+                for hop in all_edit_distance.keys():
+                    all_edit_distance[hop] /= all_path_hop_count[hop]
+                path_metrics_reportable = True
+            else:
+                all_final_path_recall = None
+                all_final_path_precision = None
+                all_final_path_f1 = None
+                overall_edit_distance = None
+                path_metrics_reportable = False
+        else:
+            path_metrics_reportable = False
+
+        if self.environment.has_paths():
             all_final_node_recall /= total_examples
             all_final_node_precision /= total_examples
             all_final_node_f1 /= total_examples
-
-            overall_edit_distance = sum(all_edit_distance.values()) / sum(all_hop_count.values())
-            for hop in all_edit_distance.keys():
-                all_edit_distance[hop] /= all_hop_count[hop]
         
         if self.environment.has_paths_or_keys():
             all_final_rel_recall /= total_examples
@@ -1521,21 +1564,22 @@ class TrainerNLQ(object):
             score_file.write(f"\tRecall: {all_final_answer_recall:7.4f}\n")
             score_file.write(f"\tPrecision: {all_final_answer_precision:7.4f}\n")
             score_file.write(f"\tF1 Score: {all_final_answer_f1:7.4f}\n")
-            if self.environment.has_paths():
+            if path_metrics_reportable:
                 score_file.write(f"GT-Edge Overlap Metrics\n")
-                score_file.write(f"\tRecall: {all_final_path_recall:7.4f}\n")
-                score_file.write(f"\tPrecision: {all_final_path_precision:7.4f}\n")
-                score_file.write(f"\tF1 Score: {all_final_path_f1:7.4f}\n")
+                score_file.write(f"	Recall: {all_final_path_recall:7.4f}\n")
+                score_file.write(f"	Precision: {all_final_path_precision:7.4f}\n")
+                score_file.write(f"	F1 Score: {all_final_path_f1:7.4f}\n")
 
-                score_file.write(f"Node-Set Overlap Metrics\n")
-                score_file.write(f"\tRecall: {all_final_node_recall:7.4f}\n")
-                score_file.write(f"\tPrecision: {all_final_node_precision:7.4f}\n")
-                score_file.write(f"\tF1 Score: {all_final_node_f1:7.4f}\n")
+                if self.environment.has_paths():
+                    score_file.write(f"Node-Set Overlap Metrics\n")
+                    score_file.write(f"	Recall: {all_final_node_recall:7.4f}\n")
+                    score_file.write(f"	Precision: {all_final_node_precision:7.4f}\n")
+                    score_file.write(f"	F1 Score: {all_final_node_f1:7.4f}\n")
 
                 score_file.write("Path Edit Distance Metrics:\n")
-                score_file.write(f"\tOverall Average: {overall_edit_distance:7.4f}\n")
+                score_file.write(f"	Overall Average: {overall_edit_distance:7.4f}\n")
                 for hop in all_edit_distance.keys():
-                    score_file.write(f"\t\t{hop}-Hop: {all_edit_distance[hop]:7.4f}\n")
+                    score_file.write(f"		{hop}-Hop: {all_edit_distance[hop]:7.4f}\n")
             
             if self.environment.has_paths_or_keys():
                 score_file.write(f"Relation-Set Overlap Metrics\n")
@@ -1612,21 +1656,22 @@ class TrainerNLQ(object):
         logger.info(f"\tRecall: {all_final_answer_recall:7.4f}")
         logger.info(f"\tPrecision: {all_final_answer_precision:7.4f}")
         logger.info(f"\tF1 Score: {all_final_answer_f1:7.4f}")
-        if self.environment.has_paths():
+        if path_metrics_reportable:
             logger.info("GT-Edge Overlap Metrics:")
-            logger.info(f"\tRecall: {all_final_path_recall:7.4f}")
-            logger.info(f"\tPrecision: {all_final_path_precision:7.4f}")
-            logger.info(f"\tF1 Score: {all_final_path_f1:7.4f}")
+            logger.info(f"	Recall: {all_final_path_recall:7.4f}")
+            logger.info(f"	Precision: {all_final_path_precision:7.4f}")
+            logger.info(f"	F1 Score: {all_final_path_f1:7.4f}")
 
-            logger.info("Node-Set Overlap Metrics:")
-            logger.info(f"\tRecall: {all_final_node_recall:7.4f}")
-            logger.info(f"\tPrecision: {all_final_node_precision:7.4f}")
-            logger.info(f"\tF1 Score: {all_final_node_f1:7.4f}")
+            if self.environment.has_paths():
+                logger.info("Node-Set Overlap Metrics:")
+                logger.info(f"	Recall: {all_final_node_recall:7.4f}")
+                logger.info(f"	Precision: {all_final_node_precision:7.4f}")
+                logger.info(f"	F1 Score: {all_final_node_f1:7.4f}")
 
             logger.info("Path Edit Distance Metrics:")
-            logger.info(f"\tOverall Average: {overall_edit_distance:7.4f}")
+            logger.info(f"	Overall Average: {overall_edit_distance:7.4f}")
             for hop in all_edit_distance.keys():
-                logger.info(f"\t\t{hop}-Hop: {all_edit_distance[hop]:7.4f}")
+                logger.info(f"		{hop}-Hop: {all_edit_distance[hop]:7.4f}")
         
         if self.environment.has_paths_or_keys():
             logger.info("Relation-Set Overlap Metrics:")
