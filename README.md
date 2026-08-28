@@ -14,8 +14,7 @@ MINERVA is a reinforcement learning agent that answers queries in knowledge grap
 - **Query-based reasoning (Knowledge Graph Completion)**: Original MINERVA setup for completing missing links. Given a query in the form **(h, r, ?)**, the agent must navigate the graph to reach the correct tail entity **t**—with the **direct edge (h, r, t)** masked on the first hop so it must find an alternative multi-hop route.
 - **Natural Language Question Answering (MultiHop KGQA)**: Multi-hop reasoning from natural language. Given a **question**, a **knowledge graph**, and a **start entity**, the agent navigates the graph to arrive at the correct **answer entity**.
 
-![gif](https://github.com/shehzaadzd/MINERVA/blob/master/images/new.gif)
- _gif courtesy of [Bhuvi Gupta](https://www.linkedin.com/in/bhuvigupta/?originalSubdomain=in)_ 
+![MINERVA KG Navigation](images/minerva_navigation.gif)
 
 
 
