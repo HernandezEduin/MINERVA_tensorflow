@@ -29,7 +29,6 @@ from __future__ import division
 import os
 import sys
 import logging
-import csv
 
 import numpy as np
 
@@ -515,47 +514,6 @@ class EpisodeNLQ(object):
         else:
             return None
     
-    def _get_relation_chain_adjacency(self) -> Dict[int, Dict[int, Tuple[int, ...]]]:
-        """
-        Lazily build an untruncated adjacency from the evaluator graph triples.
-
-        This is only used for test-time semantic path expansion. It avoids using
-        the fixed-size action array because that array can be truncated by
-        max_num_actions, while the multi-answer reference set should contain all
-        graph paths matching the annotated relation chain.
-        """
-        cached = getattr(self.grapher, "_relation_chain_adjacency", None)
-        cached_key = getattr(self.grapher, "_relation_chain_adjacency_key", None)
-        graph_key = (self.grapher.triple_store, self.grapher.use_directed_graph)
-        if cached is not None and cached_key == graph_key:
-            return cached
-
-        adjacency_sets: Dict[int, Dict[int, Set[int]]] = {}
-        with open(self.grapher.triple_store, "r") as triple_file_raw:
-            triple_file = csv.reader(triple_file_raw, delimiter="\t")
-            for line in triple_file:
-                if len(line) < 3:
-                    continue
-                head_entity = self.grapher.entity_vocab.get(line[0])
-                relation = self.grapher.relation_vocab.get(line[1])
-                tail_entity = self.grapher.entity_vocab.get(line[2])
-                if head_entity is None or relation is None or tail_entity is None:
-                    continue
-                if self.grapher.use_directed_graph and relation in self.grapher.inverse_tokens:
-                    continue
-                adjacency_sets.setdefault(head_entity, {}).setdefault(relation, set()).add(tail_entity)
-
-        adjacency: Dict[int, Dict[int, Tuple[int, ...]]] = {
-            head: {
-                relation: tuple(sorted(targets))
-                for relation, targets in rel_targets.items()
-            }
-            for head, rel_targets in adjacency_sets.items()
-        }
-        self.grapher._relation_chain_adjacency = adjacency
-        self.grapher._relation_chain_adjacency_key = graph_key
-        return adjacency
-    
     def get_semantically_valid_paths_from_relation_chain(self, idx: int) -> List[List[Tuple[int, int, int]]]:
         """
         Build all entity-level paths that follow the annotated relation chain and end
@@ -563,9 +521,9 @@ class EpisodeNLQ(object):
 
         This is intended for test-only multi-answer path-fidelity evaluation when
         the dataset has Path-Key relation chains but no entity-level Paths column.
-        Paths are generated on demand from the selected evaluator graph triples
-        (graph.txt or full_graph.txt), respecting the current directed/inverse-
-        relation setting but not train/dev path annotations.
+        The graph-level traversal is delegated to ``RelationEntityGrapher``; its
+        untruncated relation adjacency is created lazily only when this method is
+        actually called.
         """
         assert self.mode == "test", "Semantic valid path expansion is only used for test evaluation."
         assert self.multi_answers, "Semantic valid path expansion is only defined for multi-answer questions."
@@ -581,28 +539,13 @@ class EpisodeNLQ(object):
 
         start_entity = int(self.start_entities[idx * self.num_rollouts])
         valid_answers = set(int(e) for e in self.end_entities[idx])
-        adjacency = self._get_relation_chain_adjacency()
-        frontier: List[Tuple[int, List[Tuple[int, int, int]]]] = [(start_entity, [])]
 
-        for relation in relation_chain:
-            next_frontier: List[Tuple[int, List[Tuple[int, int, int]]]] = []
-            seen_paths = set()
-            for current_entity, path in frontier:
-                for target_entity in adjacency.get(current_entity, {}).get(relation, ()):
-                    target_entity = int(target_entity)
-                    if target_entity in self.invalid_ent_tokens or relation in self.invalid_rel_tokens:
-                        continue
-                    next_path = path + [(current_entity, relation, target_entity)]
-                    key = tuple(next_path)
-                    if key in seen_paths:
-                        continue
-                    seen_paths.add(key)
-                    next_frontier.append((target_entity, next_path))
-            frontier = next_frontier
-            if not frontier:
-                break
+        valid_paths = self.grapher.find_paths_by_relation_chain(
+            start_entity=start_entity,
+            relation_chain=relation_chain,
+            target_entities=valid_answers,
+        )
 
-        valid_paths = [path for entity, path in frontier if entity in valid_answers]
         self._semantic_valid_path_cache[idx] = valid_paths
         return valid_paths
 

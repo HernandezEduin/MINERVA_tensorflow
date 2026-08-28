@@ -28,7 +28,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Set, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -128,8 +128,14 @@ class RelationEntityGrapher:
         self.use_stop_signal: bool = use_stop_signal
         self.use_restart_signal: bool = use_restart_signal
         self.use_directed_graph: bool = use_directed_graph
-        # Temporary storage for graph construction
-        self.store: defaultdict = defaultdict(list)
+        # Temporary storage used only while constructing a graph representation.
+        # It is released after construction and recreated lazily only when needed.
+        self.store: Optional[defaultdict] = None
+
+        # Untruncated relation-indexed adjacency used by semantic relation-chain
+        # traversal. Keep this lazy: train/dev and normal test navigation never
+        # allocate it unless relation-chain traversal is explicitly requested.
+        self._relation_chain_adjacency: Optional[Dict[int, Dict[int, Tuple[int, ...]]]] = None
         
         # Pre-computed action space: (num_entities, max_actions, 2)
         # Last dimension: [target_entity_id, relation_id]
@@ -156,6 +162,34 @@ class RelationEntityGrapher:
         # Build the graph and action spaces
         self.create_graph()
         logging.info("Knowledge graph constructed successfully")
+
+    def _load_store(self) -> None:
+        """
+        Load the untruncated graph triples into the temporary ``self.store``.
+
+        ``self.store`` is intentionally transient. The normal navigation action array
+        is built from it during initialization and then the store is released. If a
+        later test-time analysis needs an untruncated graph representation, the store
+        is recreated lazily from ``triple_store`` and released again after use.
+        """
+        if self.store is not None:
+            return
+
+        store = defaultdict(list)
+        with open(self.triple_store, 'r') as triple_file_raw:
+            triple_file = csv.reader(triple_file_raw, delimiter='\t')
+            for line in triple_file:
+                head_entity = self.entity_vocab[line[0]]
+                relation = self.relation_vocab[line[1]]
+                tail_entity = self.entity_vocab[line[2]]
+                # Add to adjacency list: head -> [(relation, tail), ...]
+                store[head_entity].append((relation, tail_entity))
+
+        self.store = store
+
+    def _free_store(self) -> None:
+        """Release the temporary untruncated triple store."""
+        self.store = None
 
     def create_graph(self) -> None:
         """
@@ -185,15 +219,8 @@ class RelationEntityGrapher:
             - Entities with more neighbors than max_actions are truncated
             - Temporary store is deleted after completion to save memory
         """
-        # Build adjacency lists from triple file
-        with open(self.triple_store, 'r') as triple_file_raw:
-            triple_file = csv.reader(triple_file_raw, delimiter='\t')
-            for line in triple_file:
-                head_entity = self.entity_vocab[line[0]]
-                relation = self.relation_vocab[line[1]]
-                tail_entity = self.entity_vocab[line[2]]
-                # Add to adjacency list: head -> [(relation, tail), ...]
-                self.store[head_entity].append((relation, tail_entity))
+        self._load_store()  # Load triples into temporary store
+        assert self.store is not None, "Temporary store should be initialized"
 
         # Build action spaces for each entity
         for entity_id in self.store:
@@ -227,9 +254,114 @@ class RelationEntityGrapher:
                 self.array_store[entity_id, action_count, 1] = relation
                 action_count += 1
                 
-        # Clean up temporary storage to free memory
-        del self.store
-        self.store = None
+        # The normal agent never needs the untruncated store after array_store is built.
+        self._free_store()
+
+    def get_relation_chain_adjacency(self) -> Dict[int, Dict[int, Tuple[int, ...]]]:
+        """
+        Lazily build and cache an untruncated relation-indexed adjacency.
+
+        This representation is intended for semantic relation-chain traversal during
+        test-time path-fidelity evaluation. It is deliberately *not* created during
+        grapher initialization, training, dev evaluation, or ordinary test navigation.
+        The first caller triggers construction; subsequent callers reuse the cache.
+
+        Unlike ``array_store``, this adjacency is not limited by ``max_num_actions``.
+        It respects ``use_directed_graph`` by excluding inverse-relation tokens when
+        directed navigation is requested.
+        """
+        if self._relation_chain_adjacency is not None:
+            return self._relation_chain_adjacency
+
+        # Recreate the temporary untruncated store only when this lazy test-time
+        # representation is actually requested. Do not retain the store afterward.
+        created_store = self.store is None
+        if created_store:
+            self._load_store()
+        assert self.store is not None
+
+        adjacency_sets: Dict[int, Dict[int, Set[int]]] = {}
+        for head_entity, actions in self.store.items():
+            for relation, target_entity in actions:
+                if self.use_directed_graph and relation in self.inverse_tokens:
+                    continue
+                adjacency_sets.setdefault(head_entity, {}).setdefault(relation, set()).add(target_entity)
+
+        self._relation_chain_adjacency = {
+            head: {
+                relation: tuple(sorted(targets))
+                for relation, targets in rel_targets.items()
+            }
+            for head, rel_targets in adjacency_sets.items()
+        }
+
+        if created_store:
+            self._free_store()
+
+        assert self._relation_chain_adjacency is not None
+        return self._relation_chain_adjacency
+
+    def clear_relation_chain_adjacency(self) -> None:
+        """Release the lazily-created untruncated relation adjacency cache."""
+        self._relation_chain_adjacency = None
+
+    def find_paths_by_relation_chain(
+        self,
+        start_entity: int,
+        relation_chain: Sequence[int],
+        target_entities: Optional[Set[int]] = None,
+    ) -> List[List[Tuple[int, int, int]]]:
+        """
+        Enumerate untruncated graph paths that follow an exact relation sequence.
+
+        Args:
+            start_entity: Entity from which every path starts.
+            relation_chain: Ordered relation IDs that each returned path must follow.
+            target_entities: Optional endpoint filter. When provided, only paths whose
+                final entity belongs to this set are returned.
+
+        Returns:
+            Entity-level paths represented as ``(head, relation, tail)`` triples.
+
+        Note:
+            Calling this method is what lazily creates the untruncated relation
+            adjacency. Therefore normal train/dev execution incurs no extra memory.
+        """
+        relation_chain = [int(r) for r in relation_chain]
+        if not relation_chain:
+            return []
+
+        start_entity = int(start_entity)
+        targets = None if target_entities is None else set(int(e) for e in target_entities)
+        adjacency = self.get_relation_chain_adjacency()
+
+        invalid_entities = {self.ePAD, self.eUNKNOWN}
+        invalid_relations = {self.rPAD, self.rUNKNOWN, self.rDUMMY}
+        frontier: List[Tuple[int, List[Tuple[int, int, int]]]] = [(start_entity, [])]
+
+        for relation in relation_chain:
+            next_frontier: List[Tuple[int, List[Tuple[int, int, int]]]] = []
+            seen_paths = set()
+            for current_entity, path in frontier:
+                for target_entity in adjacency.get(current_entity, {}).get(relation, ()):
+                    target_entity = int(target_entity)
+                    if target_entity in invalid_entities or relation in invalid_relations:
+                        continue
+
+                    next_path = path + [(current_entity, relation, target_entity)]
+                    path_key = tuple(next_path)
+                    if path_key in seen_paths:
+                        continue
+                    seen_paths.add(path_key)
+                    next_frontier.append((target_entity, next_path))
+
+            frontier = next_frontier
+            if not frontier:
+                break
+
+        if targets is None:
+            return [path for _, path in frontier]
+        return [path for entity, path in frontier if entity in targets]
 
     def return_next_raw_actions(
         self, 
