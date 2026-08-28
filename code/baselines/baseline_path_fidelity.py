@@ -182,6 +182,11 @@ def compute_path_fidelity(
     if episode.paths_exists:
         metrics["PED"] = float(episode.get_path_edit_distance(cleaned, idx))
         metrics["F1_SG"] = float(episode.get_subgraph_overlap(cleaned, idx)[2])
+    elif episode.multi_answers and episode.path_key_exists and episode.mode == "test":
+        ped = episode.get_multi_answer_path_edit_distance(cleaned, idx)
+        overlap = episode.get_multi_answer_subgraph_overlap(cleaned, idx)
+        metrics["PED"] = float(ped) if ped is not None else None
+        metrics["F1_SG"] = float(overlap[2]) if overlap is not None else None
 
     if episode.paths_exists or episode.path_key_exists:
         metrics["RED"] = float(episode.get_relation_edit_distance(relations, idx))
@@ -310,10 +315,13 @@ def write_results(path: Optional[str], output_format: str, payload: Dict[str, An
 
 def metric_availability_notes(metadata: Dict[str, Any]) -> Dict[str, str]:
     notes: Dict[str, str] = {}
-    if metadata.get("paths_column") is None:
-        notes["PED"] = "unavailable: no entity-level reference Paths column; evaluator only has relation-chain Path-Key data"
-        notes["F1_SG"] = "unavailable: no entity-level reference Paths column; evaluator only has relation-chain Path-Key data"
-    if metadata.get("paths_column") is None and metadata.get("path_keys_column") is None:
+    has_paths = metadata.get("paths_column") is not None
+    has_path_keys = metadata.get("path_keys_column") is not None
+    is_multi_answer = bool(metadata.get("is_multi_answer", False))
+    if not has_paths and not (is_multi_answer and has_path_keys):
+        notes["PED"] = "unavailable: no entity-level reference Paths column and no multi-answer Path-Key semantic expansion"
+        notes["F1_SG"] = "unavailable: no entity-level reference Paths column and no multi-answer Path-Key semantic expansion"
+    if not has_paths and not has_path_keys:
         notes["RED"] = "unavailable: no Paths or Path-Key reference data"
         notes["F1_Rel"] = "unavailable: no Paths or Path-Key reference data"
     return notes
