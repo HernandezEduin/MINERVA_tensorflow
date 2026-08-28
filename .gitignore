@@ -7,3 +7,5 @@
 .cache/*
 /saved_models/*
 /wandb/*
+/configs/*
+/temp/*
