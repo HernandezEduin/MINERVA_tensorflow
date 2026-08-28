@@ -287,6 +287,10 @@ class RelationEntityGrapher:
                     continue
                 adjacency_sets.setdefault(head_entity, {}).setdefault(relation, set()).add(target_entity)
 
+        # We no longer need the original list-based graph.
+        if created_store:
+            self._free_store()
+
         self._relation_chain_adjacency = {
             head: {
                 relation: tuple(sorted(targets))
@@ -294,9 +298,6 @@ class RelationEntityGrapher:
             }
             for head, rel_targets in adjacency_sets.items()
         }
-
-        if created_store:
-            self._free_store()
 
         assert self._relation_chain_adjacency is not None
         return self._relation_chain_adjacency

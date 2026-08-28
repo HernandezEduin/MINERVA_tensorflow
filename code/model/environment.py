@@ -1252,6 +1252,10 @@ class EnvNLQ(object):
             - Affects episode generation behavior in get_episodes()
         """
         assert mode in ['train', 'dev', 'test'], f"Error! Invalid mode: {mode}"
+
+        if self.mode == "test" and mode != "test":
+            self.grapher.clear_relation_chain_adjacency()
+
         self.mode = mode
         self.batcher.set_mode(mode)
         self.total_no_examples = self.batcher.get_question_num()
